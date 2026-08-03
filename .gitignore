@@ -1,0 +1,10 @@
+node_modules
+.next
+out
+coverage
+*.log
+.env
+.env.local
+.DS_Store
+drizzle/meta
+*.tsbuildinfo
