@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { aggregateMacros, calculateBmi, calculateStreak, calculateVolume, kgFromUnit, nextTemplatePosition, valueInUnit, weekCompletion } from "./metrics";
+import { aggregateMacros, calculateBmi, calculateStreak, calculateVolume, isDateInLoggingWindow, kgFromUnit, loggingWindow, nextTemplatePosition, valueInUnit, weekCompletion } from "./metrics";
 
 describe("canonical units", () => {
   it("converts pounds at the UI boundary", () => {
@@ -25,6 +25,19 @@ describe("training metrics", () => {
     expect(week[0].date).toBe("2026-08-03");
     expect(week[0].complete).toBe(true);
     expect(week).toHaveLength(7);
+  });
+
+  it("keeps the logging window to seven days on either side", () => {
+    const from = new Date("2026-08-03T12:00:00");
+    const window = loggingWindow([], from);
+    expect(window).toHaveLength(15);
+    expect(window[0].date).toBe("2026-07-27");
+    expect(window[7].date).toBe("2026-08-03");
+    expect(window[14].date).toBe("2026-08-10");
+    expect(isDateInLoggingWindow("2026-07-27", from)).toBe(true);
+    expect(isDateInLoggingWindow("2026-08-10", from)).toBe(true);
+    expect(isDateInLoggingWindow("2026-07-26", from)).toBe(false);
+    expect(isDateInLoggingWindow("2026-08-11", from)).toBe(false);
   });
 
   it("counts only completed weighted volume", () => {

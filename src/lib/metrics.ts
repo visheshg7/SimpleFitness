@@ -26,6 +26,19 @@ export function daysAgoKey(days: number, from = new Date()) {
   return dateKey(date);
 }
 
+export function isDateInLoggingWindow(value: string, from = new Date()) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+  const target = new Date(`${value}T12:00:00`);
+  if (Number.isNaN(target.getTime()) || dateKey(target) !== value) return false;
+  const start = new Date(from);
+  start.setHours(12, 0, 0, 0);
+  start.setDate(start.getDate() - 7);
+  const end = new Date(from);
+  end.setHours(12, 0, 0, 0);
+  end.setDate(end.getDate() + 7);
+  return target >= start && target <= end;
+}
+
 export function calculateStreak(completedDates: string[], today = new Date()) {
   const dates = new Set(completedDates);
   let cursor = dateKey(today);
@@ -54,6 +67,26 @@ export function weekCompletion(completedDates: string[], from = new Date()) {
     const current = new Date(start);
     current.setDate(start.getDate() + index);
     result.push({ label: current.toLocaleDateString("en-US", { weekday: "narrow" }), date: dateKey(current), complete: dates.has(dateKey(current)), today: dateKey(current) === dateKey(from) });
+  }
+  return result;
+}
+
+export function loggingWindow(completedDates: string[], from = new Date()) {
+  const dates = new Set(completedDates);
+  const result: Array<{ label: string; dateLabel: string; date: string; complete: boolean; today: boolean }> = [];
+  const start = new Date(from);
+  start.setDate(start.getDate() - 7);
+  for (let index = 0; index < 15; index += 1) {
+    const current = new Date(start);
+    current.setDate(start.getDate() + index);
+    const date = dateKey(current);
+    result.push({
+      label: current.toLocaleDateString("en-US", { weekday: "short" }),
+      dateLabel: current.toLocaleDateString("en-US", { month: "short", day: "numeric" }),
+      date,
+      complete: dates.has(date),
+      today: date === dateKey(from),
+    });
   }
   return result;
 }

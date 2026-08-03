@@ -1,6 +1,6 @@
-# Training Journal: Developer Memory
+# Simple Fitness: Developer Memory
 
-**Document purpose:** CTO-level memory repository for developers working on the Training Journal application.
+**Document purpose:** CTO-level memory repository for developers working on the Simple Fitness application.
 
 **Last reviewed:** 2026-08-03
 
@@ -8,7 +8,7 @@
 
 ## 1. Product Contract
 
-Training Journal is a private, single-user workout, nutrition, and body-metric journal. It optimizes for fast mobile entry and continuity rather than accounts, social features, clinical nutrition, or an extensive exercise catalog.
+Simple Fitness is a private, single-user workout, nutrition, and body-metric journal. It optimizes for fast mobile entry and continuity rather than accounts, social features, clinical nutrition, or an extensive exercise catalog.
 
 The product has one logical owner. There are no user registration, email, password reset, multi-user, sharing, leaderboard, payment, or role-management concepts.
 

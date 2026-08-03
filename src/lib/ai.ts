@@ -17,7 +17,7 @@ async function askOpenRouter(system: string, user: string) {
   try {
     const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
       method: "POST",
-      headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json", "HTTP-Referer": process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000", "X-Title": "Training Journal" },
+      headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json", "HTTP-Referer": process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000", "X-Title": "Simple Fitness" },
       body: JSON.stringify({
         model,
         temperature: 0.1,
@@ -46,7 +46,7 @@ async function askOpenRouter(system: string, user: string) {
 export async function parseWorkout(rawText: string, exerciseNames: string[]): Promise<WorkoutParse> {
   const text = rawTextSchema.parse(rawText);
   const result = await askOpenRouter(
-    `You parse workout notes into JSON. Return exactly {"exercises":[{"name":string,"sets":[{"weight":number|null,"unit":"kg"|"lb"|null,"reps":number|null}],"notes":string?}]}. Use one or more sets. Reps may be null. Never invent an exercise not present in the note. The available exercise names are: ${exerciseNames.join(", ")}.`,
+    `You parse workout notes into JSON. Return exactly {"exercises":[{"name":string,"primaryMuscle":string,"sets":[{"weight":number|null,"unit":"kg"|"lb"|null,"reps":number|null}],"notes":string?}]}. Use one or more sets. Reps may be null. Never invent an exercise not present in the note. Use an exact available exercise name when the note clearly matches one. If it does not match an available name, preserve the exercise name from the note and infer its primary target muscle in primaryMuscle so it can be reviewed before being added. The available exercise names are: ${exerciseNames.join(", ")}.`,
     text,
   );
   const parsed = workoutParseSchema.safeParse(result);

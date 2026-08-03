@@ -1,4 +1,4 @@
-# Training Journal
+# Simple Fitness
 
 A private, single-user workout, nutrition, and body-metric journal built with Next.js, Drizzle, and Neon Postgres.
 

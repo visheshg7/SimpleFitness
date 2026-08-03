@@ -9,7 +9,7 @@ export const setInputSchema = z.object({
   exerciseId: z.string().uuid(),
   setNumber: z.number().int().min(1).max(30),
   weight: finiteNumber.min(0).max(2000).nullable().optional(),
-  reps: z.number().int().min(1).max(1000).nullable().optional(),
+  reps: z.number().int().min(0).max(1000).nullable().optional(),
   unit: unitSchema.default("kg"),
   completed: z.boolean(),
 });
@@ -23,6 +23,7 @@ export const parserSetSchema = z.object({
 export const workoutParseSchema = z.object({
   exercises: z.array(z.object({
     name: z.string().trim().min(1).max(120),
+    primaryMuscle: z.string().trim().min(1).max(60),
     sets: z.array(parserSetSchema).min(1).max(30),
     notes: z.string().max(500).optional(),
   })).min(1).max(30),
@@ -45,7 +46,7 @@ export const mealParseSchema = z.object({
 });
 
 export const rawTextSchema = z.string().trim().min(1, "Write a little more so it can be parsed.").max(2000);
-export const mealConfirmSchema = mealParseSchema.extend({ rawInput: rawTextSchema });
+export const mealConfirmSchema = mealParseSchema.extend({ rawInput: rawTextSchema, mealDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/) });
 export const bodyMetricSchema = z.object({
   metricDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
   weight: finiteNumber.min(20).max(500),

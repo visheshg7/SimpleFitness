@@ -1,7 +1,7 @@
 import { and, asc, desc, eq, isNotNull, lt } from "drizzle-orm";
 import { getDb } from "@/db";
 import { exercises, sessionExercises, setLogs, sessions, templateExercises, users, workoutTemplates } from "@/db/schema";
-import { calculateStreak, dateKey, nextTemplatePosition, weekCompletion } from "@/lib/metrics";
+import { calculateStreak, dateKey, loggingWindow, nextTemplatePosition, weekCompletion } from "@/lib/metrics";
 
 export async function getTodayData(ownerId: string, today = dateKey(new Date())) {
   const db = getDb();
@@ -53,6 +53,10 @@ export async function getTodayData(ownerId: string, today = dateKey(new Date()))
     const sets = currentSets.filter((set) => set.exerciseId === exercise.id);
     const previous = previousSets.filter(({ set }) => set.exerciseId === exercise.id);
     const previousSessionId = previous[0]?.session.id;
+    const personalBestWeightKg = previous.reduce<number | null>((best, { set }) => {
+      if (!set.completed || set.weightKg === null) return best;
+      return best === null ? set.weightKg : Math.max(best, set.weightKg);
+    }, null);
     return {
       id: exercise.id,
       sessionExerciseId,
@@ -62,19 +66,23 @@ export async function getTodayData(ownerId: string, today = dateKey(new Date()))
       targetReps,
       sets,
       lastSession: previousSessionId ? previous.filter(({ session }) => session.id === previousSessionId).map(({ set }) => set) : [],
+      personalBestWeightKg,
     };
   });
 
   const dates = completedSessions.map((session) => session.sessionDate);
+  const currentDate = dateKey(new Date());
   return {
     profile,
     templates,
     today,
+    currentDate,
     session: activeSession,
     selectedTemplateId,
     exercises: exercisesForToday,
     library,
     streak: calculateStreak(dates),
     week: weekCompletion(dates),
+    days: loggingWindow(dates),
   };
 }

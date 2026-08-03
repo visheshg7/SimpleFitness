@@ -5,13 +5,14 @@ import { revalidatePath } from "next/cache";
 import { getDb } from "@/db";
 import { bodyMetrics } from "@/db/schema";
 import { requireSession } from "@/lib/auth";
-import { calculateBmi, kgFromUnit } from "@/lib/metrics";
+import { calculateBmi, isDateInLoggingWindow, kgFromUnit } from "@/lib/metrics";
 import { bodyMetricSchema } from "@/lib/validation";
 
 export async function saveBodyMetric(input: unknown) {
   try {
     const ownerId = await requireSession();
     const parsed = bodyMetricSchema.parse(input);
+    if (!isDateInLoggingWindow(parsed.metricDate)) throw new Error("Choose a date within the available logging window.");
     const weightKg = kgFromUnit(parsed.weight, parsed.unit);
     if (!weightKg) throw new Error("Weight is required.");
     const bmi = calculateBmi(weightKg, parsed.heightCm);

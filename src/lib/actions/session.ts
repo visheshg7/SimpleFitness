@@ -1,12 +1,12 @@
 "use server";
 
-import { and, asc, eq, isNotNull, or, sql } from "drizzle-orm";
+import { and, asc, eq, inArray, isNotNull, or, sql } from "drizzle-orm";
 import { z } from "zod";
 import { revalidatePath } from "next/cache";
 import { getDb } from "@/db";
 import { exercises, sessionExercises, sessions, setLogs, templateExercises } from "@/db/schema";
 import { requireSession } from "@/lib/auth";
-import { kgFromUnit } from "@/lib/metrics";
+import { isDateInLoggingWindow, kgFromUnit } from "@/lib/metrics";
 import { parserSetSchema, setInputSchema, unitSchema } from "@/lib/validation";
 
 const failure = (error: unknown) => ({ success: false as const, error: error instanceof Error && error.message !== "UNAUTHENTICATED" ? error.message : "That change could not be saved." });
@@ -42,6 +42,7 @@ async function seedSessionPlan(sessionId: string, templateId: string) {
 export async function chooseTemplate(input: { templateId: string; sessionDate: string }) {
   try {
     const ownerId = await requireSession();
+    if (!isDateInLoggingWindow(input.sessionDate)) throw new Error("Choose a date within the available logging window.");
     const db = getDb();
     const existing = await db.select().from(sessions).where(and(eq(sessions.ownerId, ownerId), eq(sessions.sessionDate, input.sessionDate))).limit(1);
     if (existing[0]) {
@@ -58,6 +59,7 @@ export async function chooseTemplate(input: { templateId: string; sessionDate: s
 export async function startSession(input: { templateId: string; sessionDate: string }) {
   try {
     const ownerId = await requireSession();
+    if (!isDateInLoggingWindow(input.sessionDate)) throw new Error("Choose a date within the available logging window.");
     const db = getDb();
     const existing = await db.select().from(sessions).where(and(eq(sessions.ownerId, ownerId), eq(sessions.sessionDate, input.sessionDate))).limit(1);
     let sessionId: string;
@@ -82,6 +84,23 @@ const sessionExerciseSchema = z.object({
   exerciseId: z.string().uuid(),
 });
 
+const newExerciseQuickLogSchema = z.object({
+  sessionId: z.string().uuid(),
+  name: z.string().trim().min(1).max(100),
+  primaryMuscle: z.string().trim().min(1).max(60),
+  sets: z.array(parserSetSchema.extend({ unit: unitSchema.optional() })).min(1).max(30),
+  defaultUnit: unitSchema,
+});
+
+const batchSetSchema = z.object({
+  exerciseId: z.string().uuid(),
+  setNumber: z.number().int().min(1).max(30),
+  weight: z.number().finite().min(0).max(2000).nullable(),
+  reps: z.number().int().min(0).max(1000).nullable(),
+  unit: unitSchema,
+  completed: z.boolean(),
+});
+
 async function ownedSession(sessionId: string, ownerId: string) {
   const session = await getDb().select().from(sessions).where(and(eq(sessions.id, sessionId), eq(sessions.ownerId, ownerId))).limit(1);
   if (!session[0]) throw new Error("Session not found.");
@@ -104,6 +123,39 @@ export async function addExerciseToSession(input: unknown) {
       await db.insert(setLogs).values(Array.from({ length: 3 }, (_, index) => ({ sessionId: parsed.sessionId, exerciseId: parsed.exerciseId, setNumber: index + 1, completed: false }))).onConflictDoNothing();
     }
     revalidatePath("/today");
+    return { success: true as const };
+  } catch (error) { return failure(error); }
+}
+
+export async function removeExerciseFromSession(input: unknown) {
+  try {
+    const ownerId = await requireSession();
+    const parsed = sessionExerciseSchema.parse(input);
+    const db = getDb();
+    const session = await ownedSession(parsed.sessionId, ownerId);
+    if (session.completedAt) throw new Error("Completed workouts keep their original exercise plan.");
+    const planned = await db.select({ id: sessionExercises.id }).from(sessionExercises).where(and(eq(sessionExercises.sessionId, parsed.sessionId), eq(sessionExercises.exerciseId, parsed.exerciseId))).limit(1);
+    if (!planned[0]) throw new Error("That exercise is not part of this workout.");
+    await db.delete(setLogs).where(and(eq(setLogs.sessionId, parsed.sessionId), eq(setLogs.exerciseId, parsed.exerciseId)));
+    await db.delete(sessionExercises).where(eq(sessionExercises.id, planned[0].id));
+    revalidatePath("/today");
+    return { success: true as const };
+  } catch (error) { return failure(error); }
+}
+
+export async function resetExerciseSets(input: unknown) {
+  try {
+    const ownerId = await requireSession();
+    const parsed = sessionExerciseSchema.parse(input);
+    const db = getDb();
+    const session = await ownedSession(parsed.sessionId, ownerId);
+    if (!session.startedAt) throw new Error("Start the workout before resetting sets.");
+    const planned = await db.select({ id: sessionExercises.id }).from(sessionExercises).where(and(eq(sessionExercises.sessionId, parsed.sessionId), eq(sessionExercises.exerciseId, parsed.exerciseId))).limit(1);
+    if (!planned[0]) throw new Error("That exercise is not part of this workout.");
+    await db.update(setLogs).set({ weightKg: null, reps: null, completed: false, updatedAt: new Date() }).where(and(eq(setLogs.sessionId, parsed.sessionId), eq(setLogs.exerciseId, parsed.exerciseId)));
+    revalidatePath("/today");
+    revalidatePath("/progress");
+    revalidatePath("/history");
     return { success: true as const };
   } catch (error) { return failure(error); }
 }
@@ -160,6 +212,7 @@ export async function logQuickSets(input: unknown) {
     const parsed = quickLogSchema.parse(input);
     const db = getDb();
     const session = await ownedSession(parsed.sessionId, ownerId);
+    if (session.completedAt) throw new Error("Completed workouts cannot add new exercises.");
     if (!session.startedAt) throw new Error("Start the workout before adding sets.");
     const added = await addExerciseToSession({ sessionId: parsed.sessionId, exerciseId: parsed.exerciseId });
     if (!added.success) throw new Error(added.error);
@@ -189,6 +242,27 @@ export async function logQuickSets(input: unknown) {
   } catch (error) { return failure(error); }
 }
 
+export async function createExerciseAndLogQuickSets(input: unknown) {
+  try {
+    const ownerId = await requireSession();
+    const parsed = newExerciseQuickLogSchema.parse(input);
+    const db = getDb();
+    const session = await ownedSession(parsed.sessionId, ownerId);
+    if (!session.startedAt) throw new Error("Start the workout before adding sets.");
+
+    const existing = await db.select({ id: exercises.id, archived: exercises.archived }).from(exercises).where(eq(exercises.name, parsed.name)).limit(1);
+    if (existing[0]?.archived) throw new Error("An archived exercise already uses that name. Restore it in Library or choose another name.");
+    const inserted = existing[0] ? [] : await db.insert(exercises).values({ name: parsed.name, primaryMuscle: parsed.primaryMuscle, defaultUnit: parsed.defaultUnit, secondaryMuscles: [] }).onConflictDoNothing({ target: exercises.name }).returning({ id: exercises.id });
+    const exerciseId = existing[0]?.id ?? inserted[0]?.id ?? (await db.select({ id: exercises.id }).from(exercises).where(eq(exercises.name, parsed.name)).limit(1))[0]?.id;
+    if (!exerciseId) throw new Error("The new exercise could not be created.");
+
+    const logged = await logQuickSets({ sessionId: parsed.sessionId, exerciseId, defaultUnit: parsed.defaultUnit, sets: parsed.sets });
+    if (!logged.success) throw new Error(logged.error ?? "The new exercise sets could not be saved.");
+    revalidatePath("/library");
+    return { success: true as const };
+  } catch (error) { return failure(error); }
+}
+
 export async function saveSet(input: unknown) {
   try {
     const ownerId = await requireSession();
@@ -198,7 +272,56 @@ export async function saveSet(input: unknown) {
     if (!ownedSession[0]) throw new Error("Session not found.");
     const exercise = await db.select({ id: exercises.id }).from(exercises).where(eq(exercises.id, parsed.exerciseId)).limit(1);
     if (!exercise[0]) throw new Error("Exercise not found.");
-    await db.insert(setLogs).values({ sessionId: parsed.sessionId, exerciseId: parsed.exerciseId, setNumber: parsed.setNumber, weightKg: kgFromUnit(parsed.weight, parsed.unit), reps: parsed.reps ?? null, completed: parsed.completed, updatedAt: new Date() }).onConflictDoUpdate({ target: [setLogs.sessionId, setLogs.exerciseId, setLogs.setNumber], set: { weightKg: kgFromUnit(parsed.weight, parsed.unit), reps: parsed.reps ?? null, completed: parsed.completed, updatedAt: new Date() } });
+    const reps = parsed.reps === 0 ? null : parsed.reps ?? null;
+    await db.insert(setLogs).values({ sessionId: parsed.sessionId, exerciseId: parsed.exerciseId, setNumber: parsed.setNumber, weightKg: kgFromUnit(parsed.weight, parsed.unit), reps, completed: parsed.completed && reps !== null, updatedAt: new Date() }).onConflictDoUpdate({ target: [setLogs.sessionId, setLogs.exerciseId, setLogs.setNumber], set: { weightKg: kgFromUnit(parsed.weight, parsed.unit), reps, completed: parsed.completed && reps !== null, updatedAt: new Date() } });
+    revalidatePath("/today");
+    revalidatePath("/progress");
+    revalidatePath("/history");
+    return { success: true as const };
+  } catch (error) { return failure(error); }
+}
+
+export async function saveSets(input: unknown) {
+  try {
+    const ownerId = await requireSession();
+    const parsed = z.object({ sessionId: z.string().uuid(), sets: z.array(batchSetSchema).max(500) }).parse(input);
+    const db = getDb();
+    const session = await ownedSession(parsed.sessionId, ownerId);
+    if (!session.startedAt) throw new Error("Start the workout before saving sets.");
+    if (!parsed.sets.length) return { success: true as const };
+    const exerciseIds = Array.from(new Set(parsed.sets.map((set) => set.exerciseId)));
+    const ownedExercises = await db.select({ id: exercises.id }).from(exercises).where(inArray(exercises.id, exerciseIds));
+    if (ownedExercises.length !== exerciseIds.length) throw new Error("One or more exercises could not be found.");
+    await db.insert(setLogs).values(parsed.sets.map((set) => {
+      const reps = set.reps === 0 ? null : set.reps;
+      return { sessionId: parsed.sessionId, exerciseId: set.exerciseId, setNumber: set.setNumber, weightKg: kgFromUnit(set.weight, set.unit), reps, completed: set.completed && reps !== null, updatedAt: new Date() };
+    })).onConflictDoUpdate({
+      target: [setLogs.sessionId, setLogs.exerciseId, setLogs.setNumber],
+      set: { weightKg: sql`excluded.weight_kg`, reps: sql`excluded.reps`, completed: sql`excluded.completed`, updatedAt: new Date() },
+    });
+    revalidatePath("/today");
+    revalidatePath("/progress");
+    revalidatePath("/history");
+    return { success: true as const };
+  } catch (error) { return failure(error); }
+}
+
+export async function deleteSet(input: unknown) {
+  try {
+    const ownerId = await requireSession();
+    const parsed = z.object({
+      sessionId: z.string().uuid(),
+      exerciseId: z.string().uuid(),
+      setNumber: z.number().int().min(1).max(30),
+    }).parse(input);
+    const db = getDb();
+    const session = await ownedSession(parsed.sessionId, ownerId);
+    if (session.completedAt === null && !session.startedAt) throw new Error("Start the workout before deleting sets.");
+    await db.delete(setLogs).where(and(eq(setLogs.sessionId, parsed.sessionId), eq(setLogs.exerciseId, parsed.exerciseId), eq(setLogs.setNumber, parsed.setNumber)));
+    const followingSets = await db.select({ setNumber: setLogs.setNumber }).from(setLogs).where(and(eq(setLogs.sessionId, parsed.sessionId), eq(setLogs.exerciseId, parsed.exerciseId), sql`${setLogs.setNumber} > ${parsed.setNumber}`)).orderBy(asc(setLogs.setNumber));
+    for (const set of followingSets) {
+      await db.update(setLogs).set({ setNumber: set.setNumber - 1, updatedAt: new Date() }).where(and(eq(setLogs.sessionId, parsed.sessionId), eq(setLogs.exerciseId, parsed.exerciseId), eq(setLogs.setNumber, set.setNumber)));
+    }
     revalidatePath("/today");
     revalidatePath("/progress");
     revalidatePath("/history");

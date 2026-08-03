@@ -1,12 +1,12 @@
 "use client";
 
-import { useEffect, useState, useTransition } from "react";
-import { ArrowRightLeft, Check, Dumbbell, Mic, Plus, Sparkles, X } from "lucide-react";
+import { forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useState, useTransition } from "react";
+import { ArrowRightLeft, Check, Dumbbell, Mic, Plus, RotateCcw, Sparkles, Trash2, X } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { saveBodyMetric } from "@/lib/actions/body";
 import { parseWorkoutText } from "@/lib/actions/ai";
 import { confirmMeal, parseMealText } from "@/lib/actions/meal";
-import { addExerciseToSession, chooseTemplate, finishSession, logQuickSets, replaceSessionExercise, saveSet, startSession } from "@/lib/actions/session";
+import { addExerciseToSession, chooseTemplate, createExerciseAndLogQuickSets, deleteSet, finishSession, logQuickSets, removeExerciseFromSession, replaceSessionExercise, resetExerciseSets, saveSet, saveSets, startSession } from "@/lib/actions/session";
 import { getTodayData } from "@/lib/queries/today";
 import { calculateBmi, kgFromUnit, valueInUnit } from "@/lib/metrics";
 import type { MealParse, WorkoutParse } from "@/lib/validation";
@@ -23,6 +23,7 @@ type LocalSet = {
   saved?: boolean;
 };
 type ActionResult = { success: boolean; error?: string };
+type ExerciseRowHandle = { flushDrafts: () => Promise<ActionResult> };
 
 export function TodayScreen({ data }: { data: TodayData }) {
   const router = useRouter();
@@ -33,11 +34,17 @@ export function TodayScreen({ data }: { data: TodayData }) {
   const [swapExercise, setSwapExercise] = useState<ExerciseData | null>(null);
   const [actionError, setActionError] = useState("");
   const [pending, startTransition] = useTransition();
+  const selectedDayRef = useRef<HTMLButtonElement>(null);
+  const exerciseRefs = useRef<Record<string, ExerciseRowHandle | null>>({});
   const selectedTemplate = data.templates.find((template) => template.id === data.selectedTemplateId);
   const isStarted = Boolean(data.session?.startedAt);
   const isComplete = Boolean(data.session?.completedAt);
   const completedSets = data.exercises.reduce((total, exercise) => total + exercise.sets.filter((set) => set.completed).length, 0);
   const totalSets = data.exercises.reduce((total, exercise) => total + (exercise.sets.length || exercise.targetSets || 0), 0);
+
+  useEffect(() => {
+    selectedDayRef.current?.scrollIntoView({ block: "nearest", inline: "center" });
+  }, [data.today]);
 
   function refreshAfter(action: () => Promise<ActionResult>) {
     setActionError("");
@@ -48,20 +55,56 @@ export function TodayScreen({ data }: { data: TodayData }) {
     });
   }
 
+  function finishWorkout() {
+    setActionError("");
+    startTransition(async () => {
+      const draftResults = await Promise.all(Object.values(exerciseRefs.current).filter((ref): ref is ExerciseRowHandle => Boolean(ref)).map((ref) => ref.flushDrafts()));
+      const draftError = draftResults.find((result) => !result.success);
+      if (draftError) {
+        setActionError(draftError.error ?? "The set drafts could not be saved.");
+        return;
+      }
+      const result = await finishSession(data.session!.id);
+      if (result.success) router.refresh();
+      else setActionError(result.error ?? "The workout could not be completed.");
+    });
+  }
+
   return <>
     <div className="page-intro">
       <div>
         <div className="eyebrow">Training log</div>
-        <h1 className="page-title">Today</h1>
-        <p className="page-subtitle">A plan is a starting point. Make the workout fit the equipment, time, and energy you have right now.</p>
+        <h1 className="page-title">{data.today === data.currentDate ? "Today" : "Daily log"}</h1>
+        <p className="page-subtitle">Choose a day to keep workouts, meals, and check-ins in the right place.</p>
       </div>
-      <div className="date-line">{new Date(`${data.today}T12:00:00`).toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" })}</div>
+      <div className="date-line">{new Date(`${data.today}T12:00:00`).toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" })}{data.today === data.currentDate ? "" : " · selected"}</div>
     </div>
 
     <div className="rule-label">Training rhythm</div>
-    <div className="streak-strip">
-      {data.week.map((day) => <div className={`day-dot${day.complete ? " complete" : ""}${day.today ? " today" : ""}`} key={day.date}>{day.label}</div>)}
+    <div className="streak-strip" role="group" aria-label="Select a logging day">
+      {data.days.map((day) => <button
+        aria-label={`${day.label}, ${day.dateLabel}${day.today ? ", today" : ""}`}
+        aria-pressed={day.date === data.today}
+        className={`day-dot${day.complete ? " complete" : ""}${day.today ? " today" : ""}${day.date === data.today ? " selected" : ""}`}
+        key={day.date}
+        ref={day.date === data.today ? selectedDayRef : undefined}
+        onClick={() => router.replace(day.date === data.currentDate ? "/today" : `/today?date=${day.date}`, { scroll: false })}
+      >
+        <span className="day-dot-label">{day.label}</span>
+        <span className="day-dot-date">{day.dateLabel}</span>
+      </button>)}
     </div>
+
+    <section className="panel capture-panel">
+      <div className="panel-heading">
+        <div>
+          <div className="eyebrow">Fast capture</div>
+          <h2 className="panel-title">Log from a note</h2>
+        </div>
+        <button className="button small secondary" onClick={() => setLogOpen(true)}><Sparkles size={14} /> Open composer</button>
+      </div>
+      <p className="page-subtitle">Type or dictate a quick workout note for {data.today === data.currentDate ? "today" : "this day"}. It can start a workout and fill the matching sets for you.</p>
+    </section>
 
     <section className="workout-panel">
       <div className="panel-heading">
@@ -81,37 +124,31 @@ export function TodayScreen({ data }: { data: TodayData }) {
           onClick={() => refreshAfter(() => chooseTemplate({ templateId: template.id, sessionDate: data.today }))}
         >{template.name}</button>)}
       </div>
-      {isStarted && <p className="activity-note">This workout has its own plan now. Swap or add movements without changing your template.</p>}
+      {isStarted && <p className="activity-note">This workout has its own plan now. Swap, reset, remove, or add movements without changing your template.</p>}
       {actionError && <p className="error-text panel-error" aria-live="polite">{actionError}</p>}
 
-      {data.exercises.length ? <div className="exercise-list">
+      {data.exercises.length ? isStarted ? <div className="exercise-list">
         {data.exercises.map((exercise) => <ExerciseRow
           data={exercise}
           key={exercise.sessionExerciseId ?? exercise.id}
-          onSwap={isStarted && !isComplete ? () => setSwapExercise(exercise) : undefined}
+          ref={(handle) => { exerciseRefs.current[exercise.id] = handle; }}
+          onRemove={!isComplete ? () => window.confirm(`Remove ${exercise.name} from this workout? Its logged sets will be deleted.`) && refreshAfter(() => removeExerciseFromSession({ sessionId: data.session!.id, exerciseId: exercise.id })) : undefined}
+          onReset={() => refreshAfter(() => resetExerciseSets({ sessionId: data.session!.id, exerciseId: exercise.id }))}
+          onSwap={!isComplete ? () => setSwapExercise(exercise) : undefined}
           sessionId={data.session?.id}
-          started={isStarted}
+          started
           unit={data.profile.preferredUnit}
         />)}
+      </div> : <div className="exercise-plan-grid" aria-label="Planned exercises">
+        {data.exercises.map((exercise, index) => <PrestartExerciseCard data={exercise} index={index} key={exercise.sessionExerciseId ?? exercise.id} />)}
       </div> : <div className="empty-state inverse-empty"><strong>No movements here yet.</strong>Add exercises from Library, or start and build this session as you go.</div>}
 
       {isStarted && !isComplete && <button className="add-exercise" onClick={() => setAddExerciseOpen(true)}><Plus size={16} /> Add an exercise</button>}
 
       <div className="workout-footer">
         <span className="panel-kicker">{isComplete ? "Completed. Your set log stays editable." : isStarted ? "Every change saves as you go." : "Choose a template, then start when you are ready."}</span>
-        {isComplete ? <span className="session-complete"><Check size={15} /> Complete</span> : isStarted ? <button className="button citrus" disabled={pending} onClick={() => refreshAfter(() => finishSession(data.session!.id))}>Finish workout</button> : <button className="button citrus" disabled={pending || !selectedTemplate} onClick={() => refreshAfter(() => startSession({ templateId: data.selectedTemplateId!, sessionDate: data.today }))}><Dumbbell size={16} /> Start workout</button>}
+         {isComplete ? <span className="session-complete"><Check size={15} /> Complete</span> : isStarted ? <button className="button citrus" disabled={pending} onClick={finishWorkout}>Finish workout</button> : <button className="button citrus" disabled={pending || !selectedTemplate} onClick={() => refreshAfter(() => startSession({ templateId: data.selectedTemplateId!, sessionDate: data.today }))}><Dumbbell size={16} /> Start workout</button>}
       </div>
-    </section>
-
-    <section className="panel capture-panel">
-      <div className="panel-heading">
-        <div>
-          <div className="eyebrow">Fast capture</div>
-          <h2 className="panel-title">Log from a note</h2>
-        </div>
-        <button className="button small secondary" onClick={() => setLogOpen(true)}><Sparkles size={14} /> Open composer</button>
-      </div>
-      <p className="page-subtitle">Type or dictate a quick workout note. It can start a workout and fill the matching sets for you.</p>
     </section>
 
     <section className="panel">
@@ -129,18 +166,19 @@ export function TodayScreen({ data }: { data: TodayData }) {
     </section>
 
     {logOpen && <WorkoutLogSheet data={data} onClose={() => setLogOpen(false)} />}
-    {mealOpen && <MealSheet onClose={() => setMealOpen(false)} />}
+    {mealOpen && <MealSheet data={data} onClose={() => setMealOpen(false)} />}
     {bodyOpen && <BodySheet data={data} onClose={() => setBodyOpen(false)} />}
     {addExerciseOpen && data.session && <AddExerciseSheet data={data} onClose={() => setAddExerciseOpen(false)} />}
     {swapExercise && <SwapExerciseSheet data={data} exercise={swapExercise} onClose={() => setSwapExercise(null)} />}
   </>;
 }
 
-function ExerciseRow({ data, unit, sessionId, started, onSwap }: { data: ExerciseData; unit: "kg" | "lb"; sessionId?: string; started: boolean; onSwap?: () => void }) {
-  const router = useRouter();
+const ExerciseRow = forwardRef<ExerciseRowHandle, { data: ExerciseData; unit: "kg" | "lb"; sessionId?: string; started: boolean; onSwap?: () => void; onReset?: () => void; onRemove?: () => void }>(function ExerciseRow({ data, unit, sessionId, started, onSwap, onReset, onRemove }, ref) {
   const [sets, setSets] = useState<LocalSet[]>([]);
   const [error, setError] = useState("");
   const [saving, startSaving] = useTransition();
+  const setTrackRef = useRef<HTMLDivElement>(null);
+  const trackDrag = useRef<{ startX: number; startScrollLeft: number } | null>(null);
 
   useEffect(() => {
     setSets(data.sets.map((set) => ({
@@ -157,21 +195,50 @@ function ExerciseRow({ data, unit, sessionId, started, onSwap }: { data: Exercis
     setSets((current) => current.map((set, setIndex) => setIndex === index ? { ...set, ...patch, saved: false } : set));
   }
 
-  function persist(set: LocalSet) {
-    if (!sessionId) return;
+  const toPayload = useCallback((set: LocalSet) => {
     const weight = set.weight === "" ? null : Number(set.weight);
-    const reps = set.reps === "" ? null : Number(set.reps);
-    if ((weight !== null && !Number.isFinite(weight)) || (reps !== null && !Number.isInteger(reps))) {
-      setError("Use a valid weight and whole-number reps.");
+    const reps = set.reps === "" || set.reps === "0" ? null : Number(set.reps);
+    if ((weight !== null && !Number.isFinite(weight)) || (reps !== null && !Number.isInteger(reps))) return null;
+    return { exerciseId: data.id, setNumber: set.setNumber, weight, reps, unit, completed: set.completed && reps !== null };
+  }, [data.id, unit]);
+
+  function saveCompletedSet(set: LocalSet) {
+    if (!sessionId) return;
+    const payload = toPayload(set);
+    if (!payload) {
+      setError("Use a valid weight and whole-number reps, or delete the set.");
       return;
     }
     setError("");
     startSaving(async () => {
-      const result = await saveSet({ sessionId, exerciseId: data.id, setNumber: set.setNumber, weight, reps, unit, completed: set.completed });
-      if (result.success) {
-        setSets((current) => current.map((item) => item.setNumber === set.setNumber ? { ...item, saved: true } : item));
-        router.refresh();
-      } else setError(result.error ?? "This set could not be saved.");
+      const result = await saveSet({ sessionId, ...payload });
+      if (result.success) setSets((current) => current.map((item) => item.setNumber === set.setNumber ? { ...item, saved: true } : item));
+      else setError(result.error ?? "This set could not be saved.");
+    });
+  }
+
+  useImperativeHandle(ref, () => ({
+    async flushDrafts() {
+      if (!sessionId) return { success: true };
+      const payloads = sets.map(toPayload);
+      if (payloads.some((payload) => payload === null)) {
+        setError("Use valid numbers in every set, or delete the incomplete set before finishing.");
+        return { success: false, error: "Use valid numbers in every set, or delete the incomplete set before finishing." };
+      }
+      const result = await saveSets({ sessionId, sets: payloads.filter((payload): payload is NonNullable<typeof payload> => payload !== null) });
+      if (result.success) setSets((current) => current.map((set) => ({ ...set, saved: true })));
+      else setError(result.error ?? "The set drafts could not be saved.");
+      return result;
+    },
+  }), [sessionId, sets, toPayload]);
+
+  function removeSet(set: LocalSet) {
+    if (!sessionId) return;
+    setError("");
+    startSaving(async () => {
+      const result = await deleteSet({ sessionId, exerciseId: data.id, setNumber: set.setNumber });
+      if (result.success) setSets((current) => current.filter((item) => item.setNumber !== set.setNumber).map((item) => item.setNumber > set.setNumber ? { ...item, setNumber: item.setNumber - 1 } : item));
+      else setError(result.error ?? "This set could not be deleted.");
     });
   }
 
@@ -179,7 +246,41 @@ function ExerciseRow({ data, unit, sessionId, started, onSwap }: { data: Exercis
     setSets((current) => [...current, { setNumber: Math.max(0, ...current.map((set) => set.setNumber)) + 1, weight: "", reps: "", completed: false, saved: false }]);
   }
 
-  const bestPrevious = Math.max(...data.lastSession.map((set) => set.weightKg ?? 0), 0);
+  const previousBest = valueInUnit(data.personalBestWeightKg, unit);
+  const currentBest = Math.max(...sets.filter((set) => set.completed).map((set) => Number(set.weight)).filter(Number.isFinite), 0);
+  const prSetNumber = previousBest !== null && currentBest > previousBest
+    ? sets.find((set) => set.completed && Number(set.weight) === currentBest)?.setNumber ?? null
+    : null;
+
+  function beginTrackDrag(event: React.PointerEvent<HTMLDivElement>) {
+    const target = event.target as HTMLElement;
+    if (target.closest("input, button, label")) return;
+    if (!setTrackRef.current || setTrackRef.current.scrollWidth <= setTrackRef.current.clientWidth) return;
+    trackDrag.current = { startX: event.clientX, startScrollLeft: setTrackRef.current.scrollLeft };
+    setTrackRef.current.setPointerCapture(event.pointerId);
+    setTrackRef.current.classList.add("is-dragging");
+  }
+
+  function moveTrackDrag(event: React.PointerEvent<HTMLDivElement>) {
+    if (!trackDrag.current || !setTrackRef.current) return;
+    event.preventDefault();
+    setTrackRef.current.scrollLeft = trackDrag.current.startScrollLeft - (event.clientX - trackDrag.current.startX);
+  }
+
+  function endTrackDrag() {
+    trackDrag.current = null;
+    setTrackRef.current?.classList.remove("is-dragging");
+  }
+
+  function scrollTrack(event: React.WheelEvent<HTMLDivElement>) {
+    const track = setTrackRef.current;
+    if (!track || track.scrollWidth <= track.clientWidth) return;
+    const delta = Math.abs(event.deltaX) > Math.abs(event.deltaY) ? event.deltaX : event.deltaY;
+    if (!delta) return;
+    event.preventDefault();
+    track.scrollLeft += delta;
+  }
+
   return <div className="exercise-row">
     <div className="exercise-heading">
       <div>
@@ -188,25 +289,73 @@ function ExerciseRow({ data, unit, sessionId, started, onSwap }: { data: Exercis
       </div>
       <div className="exercise-actions">
         {data.lastSession.length > 0 && <div className="last-reference">Last <strong>{data.lastSession.map((set) => `${set.weightKg ? valueInUnit(set.weightKg, unit)?.toFixed(0) : "-"}${set.weightKg ? unit : ""} x ${set.reps ?? "-"}`).join(", ")}</strong></div>}
+        {onReset && <button className="exercise-action icon-only-action" onClick={onReset} title="Reset this exercise's sets" aria-label={`Reset ${data.name} sets`}><RotateCcw size={14} /></button>}
         {onSwap && <button className="exercise-action" onClick={onSwap}><ArrowRightLeft size={13} /> Swap</button>}
-      </div>
-    </div>
-    {started ? <>
-      <div className="set-labels" aria-hidden="true"><span>Set</span><span>Weight</span><span>Reps</span><span>Done</span></div>
-      {sets.map((set, index) => {
-        const isPr = set.completed && Number(set.weight) > valueInUnit(bestPrevious, unit)!;
-        return <div className="set-line" key={set.setNumber}>
-          <span className="set-number">{set.setNumber}</span>
-          <input className="field tiny-field" inputMode="decimal" aria-label={`${data.name} set ${set.setNumber} weight`} placeholder={unit} value={set.weight} onChange={(event) => update(index, { weight: event.target.value })} onBlur={() => persist(sets[index])} />
-          <input className="field tiny-field" inputMode="numeric" aria-label={`${data.name} set ${set.setNumber} reps`} placeholder="reps" value={set.reps} onChange={(event) => update(index, { reps: event.target.value })} onBlur={() => persist(sets[index])} />
-          <button className={`complete-button${set.completed ? " done" : ""}`} aria-label={set.completed ? "Mark set incomplete" : "Complete set"} onClick={() => { const next = { ...set, completed: !set.completed }; update(index, next); persist(next); }}><Check size={16} /></button>
-          <span className={isPr ? "pr-note" : "save-state"}>{isPr ? "PR" : !set.saved && saving ? "Saving" : !set.saved ? "Unsaved" : ""}</span>
-        </div>;
-      })}
-      {error && <p className="error-text set-error" aria-live="polite">{error}</p>}
-      <button className="add-set" onClick={addSet}><Plus size={13} /> Add set</button>
+        {onRemove && <button className="exercise-action remove-action icon-only-action" onClick={onRemove} title="Remove this exercise" aria-label={`Remove ${data.name}`}><Trash2 size={14} /></button>}
+       </div>
+     </div>
+     {started ? <>
+        <div className="set-track" aria-label={`${data.name} sets`} ref={setTrackRef} onPointerDown={beginTrackDrag} onPointerMove={moveTrackDrag} onPointerUp={endTrackDrag} onPointerCancel={endTrackDrag} onWheel={scrollTrack}>
+        {sets.map((set, index) => {
+          const isPr = set.setNumber === prSetNumber;
+         return <div className={`set-card${set.completed ? " completed" : ""}`} key={set.setNumber}>
+            <div className="set-card-heading"><span className="set-number">Set {set.setNumber}</span><span className="set-card-actions"><span className={isPr ? "pr-note" : "save-state"} title={isPr ? "Heaviest completed set compared with previous sessions" : undefined}>{isPr ? "Weight PR" : !set.saved && saving ? "Saving" : !set.saved ? "Unsaved" : ""}</span><button className="set-delete" type="button" onClick={() => removeSet(set)} aria-label={`Delete set ${set.setNumber}`} title="Delete set"><Trash2 size={13} /></button></span></div>
+            <AdjustableNumber label="Weight" unit={unit} value={set.weight} step={unit === "lb" ? 5 : 2.5} inputMode="decimal" onChange={(value) => update(index, { weight: value })} />
+            <AdjustableNumber label="Reps" value={set.reps} step={1} inputMode="numeric" onChange={(value) => update(index, { reps: value })} />
+            <button className={`complete-button${set.completed ? " done" : ""}`} aria-label={set.completed ? "Mark set incomplete" : "Complete set"} onClick={() => { const next = { ...set, completed: !set.completed }; update(index, next); saveCompletedSet(next); }}><Check size={16} /></button>
+         </div>;
+       })}
+       </div>
+       {error && <p className="error-text set-error" aria-live="polite">{error}</p>}
+       <button className="add-set" onClick={addSet}><Plus size={13} /> Add set</button>
     </> : <p className="panel-kicker">Start the workout to log these sets. You can still change the plan after starting.</p>}
-  </div>;
+   </div>;
+});
+
+function PrestartExerciseCard({ data, index }: { data: ExerciseData; index: number }) {
+  return <article className="exercise-plan-card">
+    <div className="exercise-plan-index">{String(index + 1).padStart(2, "0")}</div>
+    <div className="exercise-name">{data.name}</div>
+    <div className="exercise-muscle">{data.primaryMuscle}</div>
+    <div className="exercise-plan-target">{data.targetSets ?? "-"} sets <span>×</span> {data.targetReps ?? "-"} reps</div>
+  </article>;
+}
+
+function AdjustableNumber({ label, unit, value, step, inputMode, onChange }: { label: string; unit?: string; value: string; step: number; inputMode: "decimal" | "numeric"; onChange: (value: string) => void }) {
+  const drag = useRef<{ startY: number; startValue: number; lastValue: string; moved: boolean } | null>(null);
+
+  function beginDrag(event: React.PointerEvent<HTMLInputElement>) {
+    if (event.pointerType === "mouse" && event.button !== 0) return;
+    const numericValue = Number(value);
+    drag.current = { startY: event.clientY, startValue: Number.isFinite(numericValue) ? numericValue : 0, lastValue: value, moved: false };
+    event.currentTarget.setPointerCapture(event.pointerId);
+  }
+
+  function moveDrag(event: React.PointerEvent<HTMLInputElement>) {
+    if (!drag.current) return;
+    const change = Math.round((drag.current.startY - event.clientY) / 18);
+    if (change === 0) return;
+    event.preventDefault();
+    drag.current.moved = true;
+    const next = Math.max(0, drag.current.startValue + change * step);
+    const nextValue = String(Number.isInteger(next) ? next : Number(next.toFixed(2)));
+    if (nextValue !== drag.current.lastValue) {
+      drag.current.lastValue = nextValue;
+      onChange(nextValue);
+    }
+  }
+
+  function endDrag() {
+    if (!drag.current) return;
+    const current = drag.current;
+    drag.current = null;
+    if (current.moved) onChange(current.lastValue);
+  }
+
+  return <label className="adjustable-number" title={`Click to edit ${label.toLowerCase()}, or drag up and down to adjust`}>
+    <span className="number-label">{label}{unit ? ` (${unit})` : ""}</span>
+    <input className="field number-field" inputMode={inputMode} aria-label={label} value={value} placeholder="-" onChange={(event) => onChange(event.target.value)} onPointerDown={beginDrag} onPointerMove={moveDrag} onPointerUp={endDrag} onPointerCancel={endDrag} />
+  </label>;
 }
 
 function SwapExerciseSheet({ data, exercise, onClose }: { data: TodayData; exercise: ExerciseData; onClose: () => void }) {
@@ -235,7 +384,7 @@ function SwapExerciseSheet({ data, exercise, onClose }: { data: TodayData; exerc
 
   return <div className="sheet-backdrop" role="dialog" aria-modal="true" aria-labelledby="swap-title">
     <div className="sheet compact-sheet">
-      <div className="sheet-heading"><div><div className="eyebrow">Adjust today only</div><h2 className="sheet-title" id="swap-title">Swap {exercise.name}</h2></div><button className="sheet-close" onClick={onClose} aria-label="Close"><X size={20} /></button></div>
+      <div className="sheet-heading"><div><div className="eyebrow">Adjust this day only</div><h2 className="sheet-title" id="swap-title">Swap {exercise.name}</h2></div><button className="sheet-close" onClick={onClose} aria-label="Close"><X size={20} /></button></div>
       {available.length ? <><p className="notice">Your template will stay unchanged. Blank planned sets move to the new exercise.</p><label className="form-group sheet-field"><span className="form-label">Replacement</span><select className="select-field" value={exerciseId} onChange={(event) => setExerciseId(event.target.value)}>{available.map((option) => <option key={option.id} value={option.id}>{option.name} · {option.primaryMuscle}</option>)}</select></label>{error && <p className="error-text">{error}</p>}<div className="sheet-actions"><button className="button ghost" onClick={onClose}>Cancel</button><button className="button" disabled={pending} onClick={swap}>{pending ? "Swapping..." : "Swap exercise"}</button></div></> : <><div className="empty-state"><strong>No unused exercises available.</strong>Add an exercise in Library first, or keep the movements already in this workout.</div><div className="sheet-actions"><button className="button" onClick={onClose}>Close</button></div></>}
     </div>
   </div>;
@@ -263,7 +412,7 @@ function AddExerciseSheet({ data, onClose }: { data: TodayData; onClose: () => v
   return <div className="sheet-backdrop" role="dialog" aria-modal="true" aria-labelledby="add-exercise-title">
     <div className="sheet compact-sheet">
       <div className="sheet-heading"><div><div className="eyebrow">Make it fit</div><h2 className="sheet-title" id="add-exercise-title">Add an exercise</h2></div><button className="sheet-close" onClick={onClose} aria-label="Close"><X size={20} /></button></div>
-      {available.length ? <><p className="notice">This is added to today&apos;s workout only, with three empty sets ready to log.</p><label className="form-group sheet-field"><span className="form-label">Exercise</span><select className="select-field" value={exerciseId} onChange={(event) => setExerciseId(event.target.value)}>{available.map((option) => <option key={option.id} value={option.id}>{option.name} · {option.primaryMuscle}</option>)}</select></label>{error && <p className="error-text">{error}</p>}<div className="sheet-actions"><button className="button ghost" onClick={onClose}>Cancel</button><button className="button" disabled={pending} onClick={add}>{pending ? "Adding..." : "Add exercise"}</button></div></> : <><div className="empty-state"><strong>Everything in your library is already in this workout.</strong>Use Library to create another movement.</div><div className="sheet-actions"><button className="button" onClick={onClose}>Close</button></div></>}
+      {available.length ? <><p className="notice">This is added to this workout only, with three empty sets ready to log.</p><label className="form-group sheet-field"><span className="form-label">Exercise</span><select className="select-field" value={exerciseId} onChange={(event) => setExerciseId(event.target.value)}>{available.map((option) => <option key={option.id} value={option.id}>{option.name} · {option.primaryMuscle}</option>)}</select></label>{error && <p className="error-text">{error}</p>}<div className="sheet-actions"><button className="button ghost" onClick={onClose}>Cancel</button><button className="button" disabled={pending} onClick={add}>{pending ? "Adding..." : "Add exercise"}</button></div></> : <><div className="empty-state"><strong>Everything in your library is already in this workout.</strong>Use Library to create another movement.</div><div className="sheet-actions"><button className="button" onClick={onClose}>Close</button></div></>}
     </div>
   </div>;
 }
@@ -307,13 +456,15 @@ function WorkoutLogSheet({ data, onClose }: { data: TodayData; onClose: () => vo
       }
       for (const parsedExercise of parsed.exercises) {
         const mapped = data.library.find((exercise) => exercise.name.toLowerCase() === parsedExercise.name.toLowerCase());
-        if (!mapped) {
-          setError(`Map “${parsedExercise.name}” to an exercise in your library before saving.`);
-          return;
-        }
-        const saved = await logQuickSets({
+        const saved = mapped ? await logQuickSets({
           sessionId,
           exerciseId: mapped.id,
+          defaultUnit: data.profile.preferredUnit,
+          sets: parsedExercise.sets.map((set) => ({ ...set, unit: set.unit ?? undefined })),
+        }) : await createExerciseAndLogQuickSets({
+          sessionId,
+          name: parsedExercise.name,
+          primaryMuscle: parsedExercise.primaryMuscle,
           defaultUnit: data.profile.preferredUnit,
           sets: parsedExercise.sets.map((set) => ({ ...set, unit: set.unit ?? undefined })),
         });
@@ -338,15 +489,13 @@ function WorkoutLogSheet({ data, onClose }: { data: TodayData; onClose: () => vo
         {error && <p className="error-text" aria-live="polite">{error}</p>}
         <div className="sheet-actions"><button className="button" disabled={pending || !text.trim()} onClick={parse}>{pending ? "Reading note..." : "Review workout"}</button></div>
       </> : <>
-        <p className="notice">Confirm the exercise and numbers. New movements are added to today&apos;s workout, not your template.</p>
+        <p className="notice">Confirm the exercise and numbers. New movements are added to this workout, not your template.</p>
         {error && <p className="error-text" aria-live="polite">{error}</p>}
-        <div className="review-table">
-          {parsed.exercises.map((exercise, exerciseIndex) => <div className="review-exercise" key={`${exercise.name}-${exerciseIndex}`}>
-            <label className="form-label">Exercise</label>
-            <select className="select-field" value={exercise.name} onChange={(event) => setParsed({ ...parsed, exercises: parsed.exercises.map((item, index) => index === exerciseIndex ? { ...item, name: event.target.value } : item) })}>
-              <option value={exercise.name}>{exercise.name} (parsed)</option>
-              {data.library.map((option) => <option value={option.name} key={option.id}>{option.name}</option>)}
-            </select>
+         <div className="review-table">
+           <datalist id="exercise-library-options">{data.library.map((option) => <option value={option.name} key={option.id} />)}</datalist>
+           {parsed.exercises.map((exercise, exerciseIndex) => <div className="review-exercise" key={exerciseIndex}>
+             <label className="form-group"><span className="form-label">Exercise name</span><input className="field" list="exercise-library-options" value={exercise.name} onChange={(event) => setParsed({ ...parsed, exercises: parsed.exercises.map((item, index) => index === exerciseIndex ? { ...item, name: event.target.value } : item) })} /></label>
+             {!data.library.some((option) => option.name.toLowerCase() === exercise.name.toLowerCase()) && <label className="form-group sheet-field"><span className="form-label">Target muscle</span><input className="field" value={exercise.primaryMuscle} onChange={(event) => setParsed({ ...parsed, exercises: parsed.exercises.map((item, index) => index === exerciseIndex ? { ...item, primaryMuscle: event.target.value } : item) })} /></label>}
             {exercise.sets.map((set, setIndex) => <div className="review-row" key={setIndex}>
               <span className="set-number">{setIndex + 1}</span>
               <input className="field tiny-field" type="number" inputMode="decimal" aria-label={`Set ${setIndex + 1} weight`} placeholder="weight" value={set.weight ?? ""} onChange={(event) => setParsed({ ...parsed, exercises: parsed.exercises.map((item, index) => index === exerciseIndex ? { ...item, sets: item.sets.map((current, innerIndex) => innerIndex === setIndex ? { ...current, weight: event.target.value === "" ? null : Number(event.target.value) } : current) } : item) })} />
@@ -361,18 +510,20 @@ function WorkoutLogSheet({ data, onClose }: { data: TodayData; onClose: () => vo
   </div>;
 }
 
-function MealSheet({ onClose }: { onClose: () => void }) {
+function MealSheet({ data, onClose }: { data: TodayData; onClose: () => void }) {
+  const router = useRouter();
   const [text, setText] = useState("");
   const [parsed, setParsed] = useState<MealParse | null>(null);
   const [error, setError] = useState("");
   const [pending, startTransition] = useTransition();
   const speech = useSpeechInput(setText);
   function parse() { setError(""); startTransition(async () => { const result = await parseMealText(text); if (result.success) setParsed(result.data); else setError(result.error); }); }
-  function confirm() { if (!parsed) return; startTransition(async () => { const result = await confirmMeal({ ...parsed, rawInput: text }); if (result.success) onClose(); else setError(result.error); }); }
+  function confirm() { if (!parsed) return; startTransition(async () => { const result = await confirmMeal({ ...parsed, rawInput: text, mealDate: data.today }); if (result.success) { router.refresh(); onClose(); } else setError(result.error); }); }
   return <div className="sheet-backdrop" role="dialog" aria-modal="true" aria-labelledby="meal-title"><div className="sheet"><div className="sheet-heading"><div><div className="eyebrow">Directional estimate</div><h2 className="sheet-title" id="meal-title">Log a meal</h2></div><button className="sheet-close" onClick={onClose} aria-label="Close"><X size={20} /></button></div>{!parsed ? <><div className="parse-box"><textarea className="field" placeholder="e.g. chicken bowl with rice and vegetables" value={text} onChange={(event) => setText(event.target.value)} /><button className={`icon-button mic-button${speech.listening ? " listening" : ""}`} onClick={speech.toggle} disabled={!speech.supported} aria-label="Use microphone"><Mic size={17} /></button></div>{error && <p className="error-text">{error}</p>}<div className="sheet-actions"><button className="button" onClick={parse} disabled={pending || !text.trim()}>{pending ? "Estimating..." : "Review estimate"}</button></div></> : <><div className="notice">Estimated values for directional awareness, not food-scale accuracy.</div><div className="macro-grid">{(["calories", "protein", "carbs", "fat"] as const).map((key) => <label className="macro-box" key={key}><span className="macro-label">{key === "calories" ? "kcal" : key}</span><input className="field tiny-field" type="number" value={parsed[key]} onChange={(event) => setParsed({ ...parsed, [key]: Number(event.target.value) })} /></label>)}</div><p className="status-text">{parsed.summary}</p>{error && <p className="error-text">{error}</p>}<div className="sheet-actions"><button className="button ghost" onClick={() => setParsed(null)}>Back</button><button className="button" disabled={pending} onClick={confirm}>{pending ? "Saving..." : "Confirm meal"}</button></div></>}</div></div>;
 }
 
 function BodySheet({ data, onClose }: { data: TodayData; onClose: () => void }) {
+  const router = useRouter();
   const [unit, setUnit] = useState<"kg" | "lb">(data.profile.preferredUnit);
   const [weight, setWeight] = useState("");
   const [height, setHeight] = useState(data.profile.heightCm ? String(data.profile.heightCm) : "");
@@ -380,6 +531,6 @@ function BodySheet({ data, onClose }: { data: TodayData; onClose: () => void }) 
   const [error, setError] = useState("");
   const [pending, startTransition] = useTransition();
   const bmi = calculateBmi(kgFromUnit(Number(weight), unit) ?? 0, Number(height) || null);
-  function submit() { startTransition(async () => { const result = await saveBodyMetric({ metricDate: data.today, weight: Number(weight), unit, heightCm: height ? Number(height) : null, bodyFatPercent: bodyFat ? Number(bodyFat) : null }); if (result.success) onClose(); else setError(result.error); }); }
+  function submit() { startTransition(async () => { const result = await saveBodyMetric({ metricDate: data.today, weight: Number(weight), unit, heightCm: height ? Number(height) : null, bodyFatPercent: bodyFat ? Number(bodyFat) : null }); if (result.success) { router.refresh(); onClose(); } else setError(result.error); }); }
   return <div className="sheet-backdrop" role="dialog" aria-modal="true" aria-labelledby="body-title"><div className="sheet"><div className="sheet-heading"><div><div className="eyebrow">Keep a useful baseline</div><h2 className="sheet-title" id="body-title">Body check-in</h2></div><button className="sheet-close" onClick={onClose} aria-label="Close"><X size={20} /></button></div><div className="form-grid"><label className="form-group"><span className="form-label">Weight</span><div className="unit-input"><input className="field" type="number" inputMode="decimal" value={weight} onChange={(event) => setWeight(event.target.value)} placeholder="72.5" /><select className="select-field" value={unit} onChange={(event) => setUnit(event.target.value as "kg" | "lb")}><option>kg</option><option>lb</option></select></div></label><label className="form-group"><span className="form-label">Height (cm)</span><input className="field" type="number" value={height} onChange={(event) => setHeight(event.target.value)} placeholder="180" /></label><label className="form-group"><span className="form-label">Body fat % (optional)</span><input className="field" type="number" value={bodyFat} onChange={(event) => setBodyFat(event.target.value)} placeholder="18" /></label></div>{bmi ? <p className="notice spaced-notice">Calculated BMI: <strong>{bmi.toFixed(1)}</strong>. This snapshot uses the height entered today.</p> : <p className="status-text spaced-notice">Add height to calculate BMI. Your saved height is prefilled when available.</p>}{error && <p className="error-text">{error}</p>}<div className="sheet-actions"><button className="button ghost" onClick={onClose}>Cancel</button><button className="button" disabled={pending || !weight} onClick={submit}>{pending ? "Saving..." : "Save check-in"}</button></div></div></div>;
 }
