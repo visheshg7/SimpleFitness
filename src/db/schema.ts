@@ -83,6 +83,23 @@ export const sessions = pgTable(
   ],
 );
 
+export const sessionExercises = pgTable(
+  "session_exercises",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    sessionId: uuid("session_id").notNull().references(() => sessions.id, { onDelete: "cascade" }),
+    exerciseId: uuid("exercise_id").notNull().references(() => exercises.id, { onDelete: "restrict" }),
+    orderIndex: integer("order_index").notNull(),
+    targetSets: integer("target_sets"),
+    targetReps: integer("target_reps"),
+  },
+  (table) => [
+    uniqueIndex("session_exercises_order_unique").on(table.sessionId, table.orderIndex),
+    uniqueIndex("session_exercises_exercise_unique").on(table.sessionId, table.exerciseId),
+    index("session_exercises_session_idx").on(table.sessionId),
+  ],
+);
+
 export const setLogs = pgTable(
   "set_logs",
   {
@@ -140,6 +157,7 @@ export type User = typeof users.$inferSelect;
 export type Exercise = typeof exercises.$inferSelect;
 export type WorkoutTemplate = typeof workoutTemplates.$inferSelect;
 export type Session = typeof sessions.$inferSelect;
+export type SessionExercise = typeof sessionExercises.$inferSelect;
 export type SetLog = typeof setLogs.$inferSelect;
 export type MealLog = typeof mealLogs.$inferSelect;
 export type BodyMetric = typeof bodyMetrics.$inferSelect;
