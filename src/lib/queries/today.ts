@@ -1,16 +1,19 @@
-import { and, asc, desc, eq, isNotNull, lt } from "drizzle-orm";
+import { and, asc, desc, eq, gte, isNotNull, lt } from "drizzle-orm";
 import { getDb } from "@/db";
-import { exercises, sessionExercises, setLogs, sessions, templateExercises, users, workoutTemplates } from "@/db/schema";
-import { calculateStreak, dateKey, loggingWindow, nextTemplatePosition, weekCompletion } from "@/lib/metrics";
+import { exercises, mealLogs, sessionExercises, setLogs, sessions, templateExercises, users, workoutTemplates } from "@/db/schema";
+import { aggregateMacros, calculateStreak, dateKey, loggingWindow, nextTemplatePosition, weekCompletion } from "@/lib/metrics";
 
 export async function getTodayData(ownerId: string, today = dateKey(new Date())) {
   const db = getDb();
-  const [owner, templates, todaySession, completedSessions, library] = await Promise.all([
+  const nextDate = new Date(`${today}T00:00:00`);
+  nextDate.setDate(nextDate.getDate() + 1);
+  const [owner, templates, todaySession, completedSessions, library, meals] = await Promise.all([
     db.select().from(users).where(eq(users.id, ownerId)).limit(1),
     db.select().from(workoutTemplates).orderBy(asc(workoutTemplates.position)),
     db.select().from(sessions).where(and(eq(sessions.ownerId, ownerId), eq(sessions.sessionDate, today))).limit(1),
     db.select({ sessionDate: sessions.sessionDate, templateId: sessions.templateId }).from(sessions).where(and(eq(sessions.ownerId, ownerId), isNotNull(sessions.completedAt))).orderBy(desc(sessions.sessionDate)).limit(120),
     db.select().from(exercises).where(eq(exercises.archived, false)).orderBy(asc(exercises.name)),
+    db.select().from(mealLogs).where(and(eq(mealLogs.ownerId, ownerId), gte(mealLogs.eatenAt, new Date(`${today}T00:00:00`)), lt(mealLogs.eatenAt, nextDate))).orderBy(asc(mealLogs.eatenAt)),
   ]);
   const profile = owner[0];
   if (!profile) throw new Error("Owner record was not found. Run the seed command first.");
@@ -72,6 +75,7 @@ export async function getTodayData(ownerId: string, today = dateKey(new Date()))
 
   const dates = completedSessions.map((session) => session.sessionDate);
   const currentDate = dateKey(new Date());
+  const dailyFuel = aggregateMacros(meals.map((meal) => ({ date: today, calories: meal.calories, protein: meal.protein, carbs: meal.carbs, fat: meal.fat })))[today] ?? null;
   return {
     profile,
     templates,
@@ -80,6 +84,7 @@ export async function getTodayData(ownerId: string, today = dateKey(new Date()))
     session: activeSession,
     selectedTemplateId,
     exercises: exercisesForToday,
+    dailyFuel,
     library,
     streak: calculateStreak(dates),
     week: weekCompletion(dates),
