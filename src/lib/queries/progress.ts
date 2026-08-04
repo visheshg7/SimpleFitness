@@ -24,13 +24,23 @@ export async function getProgressData(ownerId: string) {
   const previousWeekVolume = workoutSets.filter((row) => { const date = new Date(`${row.session.sessionDate}T12:00:00`); return date >= previousWeekStart && date < currentWeekStart; }).reduce((total, row) => total + (row.set.completed && row.set.weightKg && row.set.reps ? row.set.weightKg * row.set.reps : 0), 0);
   const muscleTotals = workoutSets.filter((row) => row.session.sessionDate >= daysAgoKey(6)).reduce<Record<string, number>>((totals, row) => { if (row.set.completed) totals[row.exercise.primaryMuscle] = (totals[row.exercise.primaryMuscle] ?? 0) + 1; return totals; }, {});
   const dailyMacros = Object.values(aggregateMacros(meals.map((meal) => ({ date: dateKey(new Date(meal.eatenAt)), calories: meal.calories, protein: meal.protein, carbs: meal.carbs, fat: meal.fat })))).sort((a, b) => a.date.localeCompare(b.date));
-  const weeklyVolume = Array.from({ length: 8 }, (_, index) => {
-    const end = new Date();
-    end.setDate(end.getDate() - (7 - index) * 7);
-    const start = new Date(end);
-    start.setDate(start.getDate() - 6);
-    const byMuscle = workoutSets.filter((row) => { const date = new Date(`${row.session.sessionDate}T12:00:00`); return date >= start && date <= end && row.set.completed; }).reduce<Record<string, number>>((totals, row) => { totals[row.exercise.primaryMuscle] = (totals[row.exercise.primaryMuscle] ?? 0) + ((row.set.weightKg ?? 0) * (row.set.reps ?? 0)); return totals; }, {});
-    return { week: start.toLocaleDateString("en-US", { month: "short", day: "numeric" }), ...byMuscle };
-  });
-  return { streak: calculateStreak(allDates), week: weekCompletion(allDates), volume, currentWeekVolume, previousWeekVolume, muscleTotals, weeklyVolume, bodyMetrics: body, dailyMacros, hasData: completed.length > 0 || meals.length > 0 || body.length > 0 };
+  const dailyVolume = Object.entries(workoutSets.reduce<Record<string, number>>((totals, row) => {
+    if (row.set.completed && row.set.weightKg !== null && row.set.reps !== null) {
+      totals[row.session.sessionDate] = (totals[row.session.sessionDate] ?? 0) + row.set.weightKg * row.set.reps;
+    }
+    return totals;
+  }, {})).map(([date, value]) => ({ date, value })).sort((a, b) => a.date.localeCompare(b.date));
+  const exerciseHistory = Object.values(workoutSets.reduce<Record<string, { name: string; primaryMuscle: string; byDate: Record<string, { weightKg: number; reps: number }> }>>((groups, row) => {
+    if (!row.set.completed || row.set.weightKg === null || row.set.reps === null) return groups;
+    const current = groups[row.exercise.id] ?? { name: row.exercise.name, primaryMuscle: row.exercise.primaryMuscle, byDate: {} };
+    const previous = current.byDate[row.session.sessionDate];
+    if (!previous || row.set.weightKg > previous.weightKg) current.byDate[row.session.sessionDate] = { weightKg: row.set.weightKg, reps: row.set.reps };
+    groups[row.exercise.id] = current;
+    return groups;
+  }, {}));
+  const exerciseProgression = exerciseHistory.map((exercise) => {
+    const points = Object.entries(exercise.byDate).sort(([a], [b]) => a.localeCompare(b)).map(([date, point]) => ({ date, ...point }));
+    return { name: exercise.name, primaryMuscle: exercise.primaryMuscle, points, currentWeightKg: points.at(-1)?.weightKg ?? 0, changeKg: points.length > 1 ? (points.at(-1)?.weightKg ?? 0) - points[0].weightKg : null };
+  }).sort((a, b) => b.points.length - a.points.length || b.currentWeightKg - a.currentWeightKg).slice(0, 5);
+  return { streak: calculateStreak(allDates), week: weekCompletion(allDates), completedDates: completed.map((row) => row.sessionDate), volume, currentWeekVolume, previousWeekVolume, muscleTotals, dailyVolume, exerciseProgression, bodyMetrics: body, dailyMacros, hasData: completed.length > 0 || meals.length > 0 || body.length > 0 };
 }
