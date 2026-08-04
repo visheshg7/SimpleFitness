@@ -1,7 +1,7 @@
 "use client";
 
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useState, useTransition } from "react";
-import { ArrowRightLeft, Check, Dumbbell, Mic, Plus, RotateCcw, Trash2, X } from "lucide-react";
+import { ArrowRightLeft, Check, ChevronLeft, ChevronRight, ClipboardList, Dumbbell, Mic, PersonStanding, Plus, RotateCcw, Trash2, UtensilsCrossed, X } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { DailyFuelCard } from "@/components/daily-fuel-card";
 import { saveBodyMetric } from "@/lib/actions/body";
@@ -35,6 +35,7 @@ export function TodayScreen({ data }: { data: TodayData }) {
   const [actionError, setActionError] = useState("");
   const [pending, startTransition] = useTransition();
   const selectedDayRef = useRef<HTMLButtonElement>(null);
+  const stripRef = useRef<HTMLDivElement>(null);
   const exerciseRefs = useRef<Record<string, ExerciseRowHandle | null>>({});
   const selectedTemplate = data.templates.find((template) => template.id === data.selectedTemplateId);
   const isStarted = Boolean(data.session?.startedAt);
@@ -70,32 +71,45 @@ export function TodayScreen({ data }: { data: TodayData }) {
     });
   }
 
+  const viewingToday = data.today === data.currentDate;
+  const hour = new Date().getHours();
+  const greeting = hour < 12 ? "Good morning!" : hour < 18 ? "Good afternoon!" : "Good evening!";
+
+  function scrollDays(direction: number) {
+    stripRef.current?.scrollBy({ left: direction * 240, behavior: "smooth" });
+  }
+
   return <>
-    <div className="page-intro">
+    <div className="page-intro today-intro">
       <div>
-        <h1 className="page-title">{data.today === data.currentDate ? "Today" : "Daily log"}</h1>
+        <p className="greeting-line" suppressHydrationWarning>{viewingToday ? greeting : "Daily log"}</p>
+        <h1 className="hero-line">{viewingToday ? "Let's get stronger today." : new Date(`${data.today}T12:00:00`).toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" })}</h1>
       </div>
-      <div className="date-line">{new Date(`${data.today}T12:00:00`).toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" })}{data.today === data.currentDate ? "" : " · selected"}</div>
     </div>
 
-    <div className="streak-strip" role="group" aria-label="Select a logging day">
-      {data.days.map((day) => <button
-        aria-label={`${day.label}, ${day.dateLabel}${day.today ? ", today" : ""}`}
-        aria-pressed={day.date === data.today}
-        className={`day-dot${day.complete ? " complete" : ""}${day.today ? " today" : ""}${day.date === data.today ? " selected" : ""}`}
-        key={day.date}
-        ref={day.date === data.today ? selectedDayRef : undefined}
-        onClick={() => router.replace(day.date === data.currentDate ? "/today" : `/today?date=${day.date}`, { scroll: false })}
-      >
-        <span className="day-dot-label">{day.label}</span>
-        <span className="day-dot-date">{day.dateLabel}</span>
-      </button>)}
+    <div className="day-strip">
+      <button className="strip-chevron" onClick={() => scrollDays(-1)} aria-label="Scroll to earlier days"><ChevronLeft size={16} /></button>
+      <div className="streak-strip" role="group" aria-label="Select a logging day" ref={stripRef}>
+        {data.days.map((day) => <button
+          aria-label={`${day.label}, ${day.dateLabel}${day.complete ? ", workout logged" : ""}${day.today ? ", today" : ""}`}
+          aria-pressed={day.date === data.today}
+          className={`day-dot${day.complete ? " complete" : ""}${day.today ? " today" : ""}${day.date === data.today ? " selected" : ""}`}
+          key={day.date}
+          ref={day.date === data.today ? selectedDayRef : undefined}
+          onClick={() => router.replace(day.date === data.currentDate ? "/today" : `/today?date=${day.date}`, { scroll: false })}
+        >
+          {day.complete && <span className="day-dot-log" aria-hidden="true"><Check size={10} strokeWidth={3} /></span>}
+          <span className="day-dot-label">{day.label}</span>
+          <span className="day-dot-date">{day.dateLabel}</span>
+        </button>)}
+      </div>
+      <button className="strip-chevron" onClick={() => scrollDays(1)} aria-label="Scroll to later days"><ChevronRight size={16} /></button>
     </div>
 
     <section className="routine-section" aria-labelledby="routine-title">
       <div className="routine-heading">
         <h2 className="routine-title" id="routine-title">Routine</h2>
-        <span className="routine-note">Choose the plan for this day</span>
+        <span className="routine-note">Choose your plan for today</span>
       </div>
       <div className="template-row" aria-label="Routine">
         {data.templates.map((template) => <button
@@ -112,9 +126,12 @@ export function TodayScreen({ data }: { data: TodayData }) {
 
     <section className="workout-panel">
       <div className="panel-heading">
-        <div>
-          <h2 className="panel-title">Workout</h2>
-          <p className="workout-subtitle">{selectedTemplate?.name ?? "Choose a routine to get started."}</p>
+        <div className="panel-title-group">
+          <span className="tile-icon"><Dumbbell size={19} /></span>
+          <div>
+            <h2 className="panel-title">Workout</h2>
+            <p className="workout-subtitle">{selectedTemplate?.name ?? "Choose a routine to get started."}</p>
+          </div>
         </div>
         <div className="workout-progress"><strong>{completedSets}</strong> / {totalSets || "-"}<span>sets</span></div>
       </div>
@@ -133,26 +150,30 @@ export function TodayScreen({ data }: { data: TodayData }) {
           started
           unit={data.profile.preferredUnit}
         />)}
-      </div> : <div className="exercise-plan-grid" aria-label="Planned exercises">
-        {data.exercises.map((exercise, index) => <PrestartExerciseCard data={exercise} index={index} key={exercise.sessionExerciseId ?? exercise.id} />)}
+      </div> : <div className="exercise-plan-list" aria-label="Planned exercises">
+        {data.exercises.map((exercise, index) => <PrestartExerciseRow data={exercise} index={index} key={exercise.sessionExerciseId ?? exercise.id} />)}
       </div> : <div className="empty-state inverse-empty"><strong>No movements yet.</strong>Add exercises in Library or add them after starting.</div>}
 
       {isStarted && !isComplete && <button className="add-exercise" onClick={() => setAddExerciseOpen(true)}><Plus size={16} /> Add an exercise</button>}
 
-      <div className="workout-footer">
-        <span className="panel-kicker">{isComplete ? "Completed. Set log stays editable." : isStarted ? "Changes save automatically." : "Choose a template and start the workout."}</span>
-         {isComplete ? <span className="session-complete"><Check size={15} /> Complete</span> : isStarted ? <button className="button citrus" disabled={pending} onClick={finishWorkout}>Finish workout</button> : <button className="button citrus" disabled={pending || !selectedTemplate} onClick={() => refreshAfter(() => startSession({ templateId: data.selectedTemplateId!, sessionDate: data.today }))}><Dumbbell size={16} /> Start workout</button>}
-      </div>
+      {isComplete || isStarted ? <div className="workout-footer">
+        <span className="panel-kicker">{isComplete ? "Completed. Set log stays editable." : "Changes save automatically."}</span>
+         {isComplete ? <span className="session-complete"><Check size={15} /> Complete</span> : <button className="button citrus" disabled={pending} onClick={finishWorkout}>Finish workout</button>}
+      </div> : <div className="workout-footer prestart">
+        <button className="button citrus start-workout" disabled={pending || !selectedTemplate} onClick={() => refreshAfter(() => startSession({ templateId: data.selectedTemplateId!, sessionDate: data.today }))}><Dumbbell size={16} /> Start workout</button>
+      </div>}
     </section>
 
     <section className="panel">
       <div className="quick-grid">
         <button className="quick-card meal-card" onClick={() => setMealOpen(true)}>
-          <span><h3>Log a meal</h3><p>AI-assisted macros estimation for quick logging.</p></span>
+          <span className="tile-icon meal"><UtensilsCrossed size={18} /></span>
+          <span className="quick-copy"><h3>Log a meal</h3><p>AI-assisted macros estimation for quick logging.</p></span>
           <span className="icon-button"><Plus size={17} /></span>
         </button>
         <button className="quick-card" onClick={() => setBodyOpen(true)}>
-          <span><h3>Body check-in</h3><p>Weight required; height and body fat optional.</p></span>
+          <span className="tile-icon body"><PersonStanding size={18} /></span>
+          <span className="quick-copy"><h3>Body check-in</h3><p>Weight required; height and body fat optional.</p></span>
           <span className="icon-button"><Plus size={17} /></span>
         </button>
       </div>
@@ -313,12 +334,15 @@ const ExerciseRow = forwardRef<ExerciseRowHandle, { data: ExerciseData; unit: "k
    </div>;
 });
 
-function PrestartExerciseCard({ data, index }: { data: ExerciseData; index: number }) {
-  return <article className="exercise-plan-card">
-    <div className="exercise-plan-index">{String(index + 1).padStart(2, "0")}</div>
-    <div className="exercise-name">{data.name}</div>
-    <div className="exercise-muscle">{data.primaryMuscle}</div>
-    <div className="exercise-plan-target">{data.targetSets ?? "-"} sets <span>×</span> {data.targetReps ?? "-"} reps</div>
+function PrestartExerciseRow({ data, index }: { data: ExerciseData; index: number }) {
+  return <article className="exercise-plan-row">
+    <span className="exercise-plan-index">{String(index + 1).padStart(2, "0")}</span>
+    <span className="exercise-plan-copy">
+      <span className="exercise-name">{data.name}</span>
+      <span className="exercise-muscle">{data.primaryMuscle}</span>
+    </span>
+    <span className="exercise-plan-target">{data.targetSets ?? "-"} sets <span>×</span> {data.targetReps ?? "-"} reps</span>
+    <ChevronRight className="exercise-plan-chevron" size={17} />
   </article>;
 }
 
@@ -496,13 +520,14 @@ function WorkoutCapture({ data }: { data: TodayData }) {
 
   return <section className={`capture-hero${parsed ? " capture-review" : ""}`} aria-labelledby="capture-title">
     <div className="capture-heading">
+      <span className="tile-icon"><ClipboardList size={19} /></span>
       <div className="capture-copy">
         <h2 className="capture-title" id="capture-title">Log a workout</h2>
-        <p className="capture-subtitle">Tell me what you did...</p>
+        <p className="capture-subtitle">Describe your workout, AI will log it for you.</p>
       </div>
     </div>
     {!parsed ? <>
-        <div className="parse-box"><textarea ref={captureInputRef} className={`field capture-field${text.includes("\n") ? " multiline" : ""}`} rows={1} placeholder="bench press, 3 sets of 8 reps, 85kg" value={text} onChange={(event) => setText(event.target.value)} /><button className={`icon-button mic-button${speech.listening ? " listening" : ""}`} onClick={speech.toggle} aria-label={speech.supported ? "Use microphone" : "Speech input unsupported"} disabled={!speech.supported}><Mic size={18} /></button></div>
+        <div className="parse-box capture-box"><textarea ref={captureInputRef} className={`field capture-field${text.includes("\n") ? " multiline" : ""}`} rows={1} placeholder="Bench press, 3 sets of 8 reps, 85kg" value={text} onChange={(event) => setText(event.target.value)} /><button className={`mic-button capture-mic${speech.listening ? " listening" : ""}`} onClick={speech.toggle} aria-label={speech.supported ? "Use microphone" : "Speech input unsupported"} disabled={!speech.supported}><Mic size={18} /></button></div>
         {speech.error && <p className="error-text">{speech.error}</p>}
         {!speech.supported && <p className="status-text">Voice input is unavailable in this browser. Text entry still works.</p>}
         {error && <p className="error-text" aria-live="polite">{error}</p>}
