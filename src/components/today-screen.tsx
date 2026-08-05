@@ -1,7 +1,7 @@
 "use client";
 
 import { forwardRef, memo, useCallback, useEffect, useImperativeHandle, useRef, useState, useTransition } from "react";
-import { ArrowRightLeft, Check, ChevronLeft, ChevronRight, ClipboardList, Dumbbell, Mic, PersonStanding, Plus, RotateCcw, Trash2, UtensilsCrossed, X } from "lucide-react";
+import { ArrowRightLeft, Check, ChevronLeft, ChevronRight, ClipboardList, Dumbbell, Mic, Pencil, PersonStanding, Plus, RotateCcw, Trash2, UtensilsCrossed, X } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { DailyFuelCard } from "@/components/daily-fuel-card";
 import { saveBodyMetric } from "@/lib/actions/body";
@@ -208,10 +208,12 @@ const ExerciseRow = forwardRef<ExerciseRowHandle, { data: ExerciseData; unit: "k
   }), [unit]);
 
   const [sets, setSets] = useState<LocalSet[]>(() => data.sets.map(toLocalSet));
+  const [editingSets, setEditingSets] = useState<Set<number>>(() => new Set());
   const [error, setError] = useState("");
   const [savingCount, setSavingCount] = useState(0);
   const setTrackRef = useRef<HTMLDivElement>(null);
   const setsRef = useRef<LocalSet[]>(sets);
+  const editingSetsRef = useRef<Set<number>>(new Set());
   const saveTimers = useRef(new Map<number, ReturnType<typeof setTimeout>>());
   const pendingSaves = useRef(new Map<number, string>());
 
@@ -286,7 +288,7 @@ const ExerciseRow = forwardRef<ExerciseRowHandle, { data: ExerciseData; unit: "k
   const updateSet = useCallback((setNumber: number, patch: Partial<LocalSet>) => {
     const existing = setsRef.current.find((set) => set.setNumber === setNumber);
     if (!existing) return;
-    const next = { ...existing, ...patch };
+    const next = { ...existing, ...patch, ...(editingSetsRef.current.has(setNumber) && existing.completed && !("completed" in patch) ? { completed: false } : {}) };
     if (next.weight === existing.weight && next.reps === existing.reps && next.completed === existing.completed) return;
     setError("");
     pendingSaves.current.delete(setNumber);
@@ -294,18 +296,32 @@ const ExerciseRow = forwardRef<ExerciseRowHandle, { data: ExerciseData; unit: "k
     scheduleSave(setNumber);
   }, [scheduleSave]);
 
-  const toggleSetCompleted = useCallback((set: LocalSet) => {
+  const editSet = useCallback((setNumber: number) => {
+    editingSetsRef.current = new Set(editingSetsRef.current).add(setNumber);
+    setEditingSets(editingSetsRef.current);
+  }, []);
+
+  const logSet = useCallback((set: LocalSet) => {
     const timer = saveTimers.current.get(set.setNumber);
     if (timer) {
       clearTimeout(timer);
       saveTimers.current.delete(set.setNumber);
     }
-    const next = { ...set, completed: !set.completed, saved: false };
+    const next = { ...set, completed: true, saved: false };
+    const payload = toPayload(next);
+    if (!payload || payload.reps === null) {
+      setError("Enter a valid whole-number rep count before logging this set.");
+      return;
+    }
     setError("");
     pendingSaves.current.delete(set.setNumber);
     setSets((current) => current.map((item) => (item.setNumber === set.setNumber ? next : item)));
+    const nextEditing = new Set(editingSetsRef.current);
+    nextEditing.delete(set.setNumber);
+    editingSetsRef.current = nextEditing;
+    setEditingSets(nextEditing);
     void persistSet(next);
-  }, [persistSet]);
+  }, [persistSet, toPayload]);
 
   const removeSet = useCallback((set: LocalSet) => {
     if (!sessionId) return;
@@ -323,6 +339,13 @@ const ExerciseRow = forwardRef<ExerciseRowHandle, { data: ExerciseData; unit: "k
           .map((item) => (item.setNumber > set.setNumber ? { ...item, setNumber: item.setNumber - 1 } : item));
         setSets(next);
         setsRef.current = next;
+        const nextEditing = new Set<number>();
+        editingSetsRef.current.forEach((setNumber) => {
+          if (setNumber < set.setNumber) nextEditing.add(setNumber);
+          if (setNumber > set.setNumber) nextEditing.add(setNumber - 1);
+        });
+        editingSetsRef.current = nextEditing;
+        setEditingSets(nextEditing);
         for (const item of next) if (!item.saved) scheduleSave(item.setNumber);
       } else setError(result.error ?? "This set could not be deleted.");
     })();
@@ -355,10 +378,7 @@ const ExerciseRow = forwardRef<ExerciseRowHandle, { data: ExerciseData; unit: "k
     const current = setsRef.current;
     const setNumber = Math.max(0, ...current.map((set) => set.setNumber)) + 1;
     setSets([...current, { setNumber, weight: "", reps: "", completed: false, saved: false }]);
-    requestAnimationFrame(() => {
-      const track = setTrackRef.current;
-      if (track) track.scrollTo({ left: track.scrollWidth, behavior: "smooth" });
-    });
+    requestAnimationFrame(() => setTrackRef.current?.lastElementChild?.scrollIntoView({ behavior: "smooth", block: "nearest" }));
   }
 
   const saving = savingCount > 0;
@@ -378,22 +398,28 @@ const ExerciseRow = forwardRef<ExerciseRowHandle, { data: ExerciseData; unit: "k
          {data.lastSession.length > 0 && <div className="last-reference">Last <strong>{data.lastSession.map((set) => `${set.weightKg ? valueInUnit(set.weightKg, unit)?.toFixed(0) : "-"}${set.weightKg ? unit : ""} x ${set.reps ?? "-"}`).join(", ")}</strong></div>}
          <div className="exercise-action-buttons">
            {onReset && <button className="exercise-action icon-only-action" onClick={onReset} title="Reset this exercise's sets" aria-label={`Reset ${data.name} sets`}><RotateCcw size={14} /></button>}
-           {onSwap && <button className="exercise-action" onClick={onSwap}><ArrowRightLeft size={13} /> Swap</button>}
+            {onSwap && <button className="exercise-action icon-only-action" onClick={onSwap} title="Swap exercise" aria-label={`Swap ${data.name}`}><ArrowRightLeft size={14} /></button>}
            {onRemove && <button className="exercise-action remove-action icon-only-action" onClick={onRemove} title="Remove this exercise" aria-label={`Remove ${data.name}`}><Trash2 size={14} /></button>}
          </div>
        </div>
-     </div>
-     {started ? <>
-       <div className="set-track" aria-label={`${data.name} sets`} ref={setTrackRef}>
-        {sets.map((set) => <SetCard
-          isPr={set.setNumber === prSetNumber}
-          key={set.setNumber}
-          onDelete={removeSet}
-          onPatch={updateSet}
-          onToggle={toggleSetCompleted}
-          saving={saving}
-          set={set}
-          unit={unit}
+      </div>
+      {started ? <>
+        <div className="set-table-header" aria-hidden="true">
+          <span>Set</span>
+          <div className="set-table-value-head"><span>Weight ({unit})</span><span>Reps</span></div>
+        </div>
+        <div className="set-track" aria-label={`${data.name} sets`} ref={setTrackRef}>
+      {sets.map((set) => <SetRow
+           isEditing={editingSets.has(set.setNumber)}
+           isPr={set.setNumber === prSetNumber}
+           key={set.setNumber}
+           onDelete={removeSet}
+           onEdit={editSet}
+           onLog={logSet}
+           onPatch={updateSet}
+           saving={saving}
+           set={set}
+           unit={unit}
         />)}
        </div>
        {error && <p className="error-text set-error" aria-live="polite">{error}</p>}
@@ -402,25 +428,30 @@ const ExerciseRow = forwardRef<ExerciseRowHandle, { data: ExerciseData; unit: "k
    </div>;
 });
 
-const SetCard = memo(function SetCard({ set, unit, saving, isPr, onPatch, onToggle, onDelete }: {
+const SetRow = memo(function SetRow({ set, unit, saving, isPr, isEditing, onPatch, onEdit, onLog, onDelete }: {
   set: LocalSet;
   unit: "kg" | "lb";
   saving: boolean;
   isPr: boolean;
+  isEditing: boolean;
   onPatch: (setNumber: number, patch: Partial<LocalSet>) => void;
-  onToggle: (set: LocalSet) => void;
+  onEdit: (setNumber: number) => void;
+  onLog: (set: LocalSet) => void;
   onDelete: (set: LocalSet) => void;
 }) {
-  return <div className={`set-card${set.completed ? " completed" : ""}`}>
-     <div className="set-card-heading"><span className="set-number">Set {set.setNumber}</span><span className="set-card-status"><span className={isPr ? "pr-note" : "save-state"} title={isPr ? "Heaviest completed set compared with previous sessions" : undefined}>{isPr ? "Weight PR" : !set.saved && saving ? "Saving" : !set.saved ? "Unsaved" : ""}</span></span></div>
-     <div className="set-card-values">
-       <AdjustableNumber label="Weight" unit={unit} value={set.weight} step={unit === "lb" ? 5 : 2.5} inputMode="decimal" onChange={(value) => onPatch(set.setNumber, { weight: value })} />
-       <AdjustableNumber label="Reps" value={set.reps} step={1} inputMode="numeric" onChange={(value) => onPatch(set.setNumber, { reps: value })} />
-     </div>
-     <div className="set-card-footer">
-       <button className="set-delete" type="button" onClick={() => onDelete(set)} aria-label={`Delete set ${set.setNumber}`} title="Delete set"><X size={19} /></button>
-       <button className={`complete-button${set.completed ? " done" : ""}`} aria-pressed={set.completed} aria-label={set.completed ? "Mark set incomplete" : "Complete set"} onClick={() => onToggle(set)}><Check size={22} /></button>
-     </div>
+  const logged = set.completed && !isEditing;
+  const editable = !logged;
+  return <div className={`set-row${logged ? " completed" : ""}${isEditing ? " editing" : ""}`}>
+    <div className="set-row-number"><strong>{set.setNumber}</strong></div>
+    <div className="set-row-values">
+      <AdjustableNumber label="Weight" value={set.weight} step={unit === "lb" ? 5 : 2.5} inputMode="decimal" disabled={!editable} onChange={(value) => onPatch(set.setNumber, { weight: value })} />
+      <AdjustableNumber label="Reps" value={set.reps} step={1} inputMode="numeric" disabled={!editable} onChange={(value) => onPatch(set.setNumber, { reps: value })} />
+    </div>
+    <div className="set-row-actions">
+      {logged ? <button className="set-edit" type="button" onClick={() => onEdit(set.setNumber)}><Pencil size={13} /></button> : <button className="set-log" type="button" disabled={saving} onClick={() => onLog(set)}><Check size={15} /></button>}
+      <button className="set-delete" type="button" onClick={() => onDelete(set)} aria-label={`Delete set ${set.setNumber}`} title="Delete set"><Trash2 size={16} /></button>
+    </div>
+    <span className={isPr ? "pr-note" : "save-state"} title={isPr ? "Heaviest completed set compared with previous sessions" : undefined}>{isPr ? "Weight PR" : !set.saved && saving ? "Saving" : !set.saved ? "Unsaved" : ""}</span>
   </div>;
 });
 
@@ -436,26 +467,35 @@ function PrestartExerciseRow({ data, index }: { data: ExerciseData; index: numbe
   </article>;
 }
 
-function AdjustableNumber({ label, unit, value, step, inputMode, onChange }: { label: string; unit?: string; value: string; step: number; inputMode: "decimal" | "numeric"; onChange: (value: string) => void }) {
-  const drag = useRef<{ startY: number; startValue: number; lastValue: string; moved: boolean } | null>(null);
+function AdjustableNumber({ label, value, step, inputMode, disabled = false, onChange }: { label: string; value: string; step: number; inputMode: "decimal" | "numeric"; disabled?: boolean; onChange: (value: string) => void }) {
+  const drag = useRef<{ startX: number; startValue: number; lastValue: string; moved: boolean } | null>(null);
+
+  function formatValue(next: number) {
+    return String(Number.isInteger(next) ? next : Number(next.toFixed(2)));
+  }
+
+  function adjust(direction: number) {
+    if (disabled) return;
+    const numericValue = Number(value);
+    const next = Math.max(0, (Number.isFinite(numericValue) ? numericValue : 0) + direction * step);
+    onChange(formatValue(next));
+  }
 
   function beginDrag(event: React.PointerEvent<HTMLInputElement>) {
-    // Drag-to-adjust is a mouse affordance. On touch devices the input must
-    // not capture the pointer, so taps focus it and swipes scroll natively.
-    if (event.pointerType !== "mouse" || event.button !== 0) return;
+    if (disabled || (event.pointerType === "mouse" && event.button !== 0)) return;
     const numericValue = Number(value);
-    drag.current = { startY: event.clientY, startValue: Number.isFinite(numericValue) ? numericValue : 0, lastValue: value, moved: false };
+    drag.current = { startX: event.clientX, startValue: Number.isFinite(numericValue) ? numericValue : 0, lastValue: value, moved: false };
     event.currentTarget.setPointerCapture(event.pointerId);
   }
 
   function moveDrag(event: React.PointerEvent<HTMLInputElement>) {
     if (!drag.current) return;
-    const change = Math.round((drag.current.startY - event.clientY) / 18);
+    const change = Math.round((event.clientX - drag.current.startX) / 18);
     if (change === 0) return;
     event.preventDefault();
     drag.current.moved = true;
     const next = Math.max(0, drag.current.startValue + change * step);
-    const nextValue = String(Number.isInteger(next) ? next : Number(next.toFixed(2)));
+    const nextValue = formatValue(next);
     if (nextValue !== drag.current.lastValue) {
       drag.current.lastValue = nextValue;
       onChange(nextValue);
@@ -469,9 +509,22 @@ function AdjustableNumber({ label, unit, value, step, inputMode, onChange }: { l
     if (current.moved) onChange(current.lastValue);
   }
 
-  return <label className="adjustable-number" title={`Click to edit ${label.toLowerCase()}, or drag up and down to adjust`}>
-    <span className="number-label">{label}{unit ? ` (${unit})` : ""}</span>
-    <input className="field number-field" inputMode={inputMode} aria-label={label} value={value} placeholder="-" onChange={(event) => onChange(event.target.value)} onPointerDown={beginDrag} onPointerMove={moveDrag} onPointerUp={endDrag} onPointerCancel={endDrag} />
+  function handleKeyDown(event: React.KeyboardEvent<HTMLInputElement>) {
+    if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+    event.preventDefault();
+    adjust(event.key === "ArrowRight" ? 1 : -1);
+  }
+
+  return <label className={`adjustable-number${disabled ? " disabled" : ""}`} title={`${disabled ? "Edit" : "Click to type, use the buttons, or swipe left and right to adjust"} ${label.toLowerCase()}`}>
+    <span className="number-control">
+      <button className="number-stepper" type="button" disabled={disabled} onClick={() => adjust(-1)} aria-label={`Decrease ${label.toLowerCase()}`}>
+        <span aria-hidden="true">−</span>
+      </button>
+      <input className="number-field" type="text" inputMode={inputMode} disabled={disabled} aria-label={label} value={value} placeholder="-" onChange={(event) => onChange(event.target.value)} onKeyDown={handleKeyDown} onPointerDown={beginDrag} onPointerMove={moveDrag} onPointerUp={endDrag} onPointerCancel={endDrag} />
+      <button className="number-stepper" type="button" disabled={disabled} onClick={() => adjust(1)} aria-label={`Increase ${label.toLowerCase()}`}>
+        <span aria-hidden="true">+</span>
+      </button>
+    </span>
   </label>;
 }
 

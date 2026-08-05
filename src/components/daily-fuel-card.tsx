@@ -17,8 +17,8 @@ export function DailyFuelCard({ data, targetCalories, targetLabel, subtitle, emp
     {data ? <>
       <div className="macro-total"><strong>{data.calories ? `${Math.round(data.calories).toLocaleString()}` : "—"}</strong><span>kcal</span></div>
       {target !== null && <FuelGuide difference={difference} label={targetLabel} progress={progress} targetCalories={target} />}
-      <MacroRow label="Protein" value={data.protein} color="var(--lime)" total={macroTotal(data)} />
-      <MacroRow label="Carbs" value={data.carbs} color="var(--fuel)" total={macroTotal(data)} />
+      <MacroRow label="Protein" value={data.protein} color="var(--accent)" total={macroTotal(data)} />
+      <MacroRow label="Carbs" value={data.carbs} color="var(--warm)" total={macroTotal(data)} />
       <MacroRow label="Fat" value={data.fat} color="var(--coral)" total={macroTotal(data)} />
       <span className="chart-note">{footer}</span>
     </> : <>{target !== null && <FuelGuide label={targetLabel} progress={progress} targetCalories={target} />}<div className="progress-empty daily-fuel-empty"><p>{emptyMessage}</p>{onLogMeal && <button className="button small citrus" onClick={onLogMeal}>Log a meal</button>}</div></>}
