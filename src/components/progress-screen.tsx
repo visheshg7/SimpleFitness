@@ -5,7 +5,7 @@ import { Check, ChevronRight, Dumbbell, Scale, Sparkles, Utensils, X } from "luc
 import { Bar, BarChart, CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { DailyFuelCard } from "@/components/daily-fuel-card";
 import { getProgressData } from "@/lib/queries/progress";
-import { dateKey } from "@/lib/metrics";
+import { calorieGoalLabel, dateKey } from "@/lib/metrics";
 
 type ProgressData = Awaited<ReturnType<typeof getProgressData>>;
 type Metric = "weight" | "bmi" | "bodyFat";
@@ -85,7 +85,7 @@ export function ProgressScreen({ data }: { data: ProgressData }) {
 
     <div className="progress-duo">
       <section className="progress-card body-card"><div className="progress-card-heading"><div><h2>Body trend</h2><p>Snapshots over {rangeLabel(range)}.</p></div><Scale size={18} className="card-icon" /></div><div className="metric-switcher">{(["weight", "bmi", "bodyFat"] as const).map((option) => <button className={metric === option ? "active" : ""} key={option} onClick={() => setMetric(option)}>{metricLabel(option)}</button>)}</div>{bodyData.length ? <><div className="body-current"><strong>{formatMetric(latestBodyPoint?.value, metric)}</strong><span>{latestBodyPoint ? formatDate(latestBodyPoint.date) : ""}</span></div><div className="chart-wrap body-chart-wrap"><ResponsiveContainer width="100%" height="100%"><LineChart data={bodyData}><CartesianGrid vertical={false} stroke={chartGrid} /><XAxis dataKey="date" hide /><YAxis domain={["dataMin - 1", "dataMax + 1"]} hide /><Tooltip contentStyle={tooltipStyle} formatter={(value) => [formatMetric(typeof value === "number" ? value : null, metric), metricLabel(metric)]} labelFormatter={(value) => formatDate(String(value))} /><Line type="monotone" dataKey="value" stroke={chartLime} strokeWidth={2.5} dot={{ r: 3, fill: chartFuel, stroke: chartLime }} connectNulls /></LineChart></ResponsiveContainer></div><span className="chart-note">{bodyChange === null ? "Baseline established" : `${bodyChange.toFixed(1)} ${metric === "weight" ? "kg" : metric === "bodyFat" ? "%" : "points"} across available snapshots`}</span></> : <div className="progress-empty">Use Today to record weight and optionally height or body fat.</div>}</section>
-       <DailyFuelCard data={macroData.length ? { calories: averageCalories, protein: averageProtein, carbs: average(macroData.map((row) => row.carbs)), fat: average(macroData.map((row) => row.fat)) } : null} subtitle="Average confirmed meal estimates." emptyMessage="Confirmed meal estimates will appear here as your food log grows." footer={`${macroData.length} logged ${macroData.length === 1 ? "day" : "days"} · estimates are for direction, not precision`} />
+       <DailyFuelCard data={macroData.length ? { calories: averageCalories, protein: averageProtein, carbs: average(macroData.map((row) => row.carbs)), fat: average(macroData.map((row) => row.fat)) } : null} targetCalories={data.dailyCalorieGoal} targetLabel={calorieGoalLabel(data.calorieGoal)} subtitle="Average confirmed meal estimates." emptyMessage="Confirmed meal estimates will appear here as your food log grows." footer={`${macroData.length} logged ${macroData.length === 1 ? "day" : "days"} · estimates are for direction, not precision`} />
     </div>
 
     {selectedMovement && <MovementSheet movement={selectedMovement} onClose={() => setSelectedMovement(null)} />}

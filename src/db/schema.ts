@@ -17,6 +17,11 @@ export const users = pgTable("users", {
   displayName: text("display_name"),
   heightCm: numeric("height_cm", { precision: 6, scale: 2, mode: "number" }),
   preferredUnit: text("preferred_unit").$type<"kg" | "lb">().notNull().default("kg"),
+  sex: text("sex").$type<"male" | "female">(),
+  birthYear: integer("birth_year"),
+  activityLevel: text("activity_level").$type<"sedentary" | "light" | "moderate" | "active" | "veryActive">(),
+  calorieGoal: text("calorie_goal").$type<"cut" | "maintain" | "bulk">(),
+  dailyCalorieGoal: integer("daily_calorie_goal"),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
 });

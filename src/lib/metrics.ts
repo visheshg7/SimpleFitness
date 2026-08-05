@@ -13,6 +13,50 @@ export function calculateBmi(weightKg: number, heightCm: number | null | undefin
   return Math.round((weightKg / ((heightCm / 100) ** 2)) * 10) / 10;
 }
 
+export const activityLevels = [
+  { value: "sedentary", label: "Sedentary", hint: "little or no exercise", multiplier: 1.2 },
+  { value: "light", label: "Lightly active", hint: "light exercise 1-3 days a week", multiplier: 1.375 },
+  { value: "moderate", label: "Moderately active", hint: "moderate exercise 3-5 days a week", multiplier: 1.55 },
+  { value: "active", label: "Very active", hint: "hard exercise 6-7 days a week", multiplier: 1.725 },
+  { value: "veryActive", label: "Extra active", hint: "hard exercise plus a physical job", multiplier: 1.9 },
+] as const;
+
+export type ActivityLevel = (typeof activityLevels)[number]["value"];
+
+export function activityMultiplier(level: ActivityLevel | null | undefined) {
+  return activityLevels.find((option) => option.value === level)?.multiplier ?? null;
+}
+
+export function calculateBmr(weightKg: number, heightCm: number, age: number, sex: "male" | "female") {
+  const base = 10 * weightKg + 6.25 * heightCm - 5 * age;
+  return Math.round(sex === "male" ? base + 5 : base - 161);
+}
+
+export function calculateTdee(bmr: number, level: ActivityLevel | null | undefined) {
+  const multiplier = activityMultiplier(level);
+  if (multiplier === null) return null;
+  return Math.round(bmr * multiplier);
+}
+
+export const calorieGoals = [
+  { value: "cut", label: "Cut", adjustment: -500 },
+  { value: "maintain", label: "Maintain", adjustment: 0 },
+  { value: "bulk", label: "Bulk", adjustment: 250 },
+] as const;
+
+export type CalorieGoal = (typeof calorieGoals)[number]["value"];
+
+export function calculateCalorieTargets(tdee: number) {
+  return calorieGoals.map((goal) => ({
+    ...goal,
+    calories: Math.max(0, Math.round(tdee + goal.adjustment)),
+  }));
+}
+
+export function calorieGoalLabel(goal: CalorieGoal | null | undefined) {
+  return calorieGoals.find((option) => option.value === goal)?.label ?? null;
+}
+
 export function dateKey(date: Date) {
   const year = date.getFullYear();
   const month = String(date.getMonth() + 1).padStart(2, "0");

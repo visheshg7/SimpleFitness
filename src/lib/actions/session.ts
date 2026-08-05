@@ -340,3 +340,18 @@ export async function finishSession(sessionId: string) {
     return { success: true as const };
   } catch (error) { return failure(error); }
 }
+
+export async function cancelSession(sessionId: string) {
+  try {
+    const ownerId = await requireSession();
+    const db = getDb();
+    const session = await ownedSession(sessionId, ownerId);
+    if (session.completedAt) throw new Error("Completed workouts cannot be canceled.");
+    if (!session.startedAt) throw new Error("Start the workout before canceling it.");
+    await db.delete(sessions).where(and(eq(sessions.id, sessionId), eq(sessions.ownerId, ownerId)));
+    revalidatePath("/today");
+    revalidatePath("/progress");
+    revalidatePath("/history");
+    return { success: true as const };
+  } catch (error) { return failure(error); }
+}

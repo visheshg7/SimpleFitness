@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useTransition } from "react";
+import { useMemo, useState, useTransition } from "react";
 import {
   Archive,
   ArchiveRestore,
@@ -26,6 +26,7 @@ import {
   saveProfile,
 } from "@/lib/actions/library";
 import { getLibraryData } from "@/lib/queries/library";
+import { activityLevels, calculateBmr, calculateCalorieTargets, calculateTdee, kgFromUnit, valueInUnit, type ActivityLevel, type CalorieGoal } from "@/lib/metrics";
 
 type LibraryData = Awaited<ReturnType<typeof getLibraryData>>;
 type LibraryTab = "templates" | "exercises" | "settings";
@@ -40,10 +41,28 @@ export function LibraryScreen({ data }: { data: LibraryData }) {
   const [exerciseUnit, setExerciseUnit] = useState<"kg" | "lb">("kg");
   const [height, setHeight] = useState(data.profile?.heightCm ? String(data.profile.heightCm) : "");
   const [profileUnit, setProfileUnit] = useState<"kg" | "lb">(data.profile?.preferredUnit ?? "kg");
+  const [sex, setSex] = useState<"male" | "female" | "">(data.profile?.sex ?? "");
+  const [age, setAge] = useState(() => data.profile?.birthYear ? String(new Date().getFullYear() - data.profile.birthYear) : "");
+  const [tdeeWeight, setTdeeWeight] = useState(() => {
+    const value = valueInUnit(data.latestWeightKg, data.profile?.preferredUnit ?? "kg");
+    return value === null ? "" : String(Math.round(value * 10) / 10);
+  });
+  const [activityLevel, setActivityLevel] = useState<ActivityLevel | "">(data.profile?.activityLevel ?? "");
+  const [calorieGoal, setCalorieGoal] = useState<CalorieGoal | "">(data.profile?.calorieGoal ?? "");
   const [exerciseSearch, setExerciseSearch] = useState("");
 
   const selectedTemplate = data.templates.find((template) => template.id === selectedTemplateId) ?? data.templates[0];
   const activeExerciseCount = data.exercises.filter((exercise) => !exercise.archived).length;
+  const bmr = useMemo(() => {
+    const weightKg = kgFromUnit(Number(tdeeWeight), profileUnit);
+    const heightCm = Number(height) || data.profile?.heightCm;
+    const ageNum = age ? Number(age) : null;
+    if (!weightKg || !heightCm || !ageNum || !sex) return null;
+    return calculateBmr(weightKg, heightCm, ageNum, sex);
+  }, [tdeeWeight, profileUnit, height, age, sex, data.profile?.heightCm]);
+  const tdee = bmr !== null && activityLevel ? calculateTdee(bmr, activityLevel) : null;
+  const calorieTargets = tdee === null ? [] : calculateCalorieTargets(tdee);
+  const selectedCalorieTarget = calorieTargets.find((target) => target.value === calorieGoal);
   const filteredExercises = data.exercises.filter((exercise) => {
     const query = exerciseSearch.trim().toLowerCase();
     return !query || `${exercise.name} ${exercise.primaryMuscle}`.toLowerCase().includes(query);
@@ -74,6 +93,17 @@ export function LibraryScreen({ data }: { data: LibraryData }) {
       return;
     }
     run(() => editExercise(exercise.id, { name, primaryMuscle, secondaryMuscles: exercise.secondaryMuscles, defaultUnit }));
+  }
+
+  function saveCalorieNeeds() {
+    if (tdee === null || !selectedCalorieTarget) {
+      window.alert("Choose a daily calorie target before saving.");
+      return;
+    }
+    const year = new Date().getFullYear();
+    const ageNum = Number(age);
+    const birthYear = age.trim() && Number.isInteger(ageNum) && ageNum >= 13 && ageNum <= 110 ? year - ageNum : null;
+    run(() => saveProfile({ sex: sex || null, birthYear, activityLevel: activityLevel || null, calorieGoal: calorieGoal || null, dailyCalorieGoal: selectedCalorieTarget.calories }));
   }
 
   return (
@@ -273,6 +303,26 @@ export function LibraryScreen({ data }: { data: LibraryData }) {
             <label className="settings-row"><span><strong>Height</strong><small>Used for body metric context</small></span><span className="settings-input"><input className="field" value={height} onChange={(event) => setHeight(event.target.value)} placeholder="180" inputMode="decimal" /><em>cm</em></span></label>
             <label className="settings-row"><span><strong>Weight unit</strong><small>Used for new entries and targets</small></span><select className="select-field settings-select" value={profileUnit} onChange={(event) => setProfileUnit(event.target.value as "kg" | "lb")}><option value="kg">Kilograms (kg)</option><option value="lb">Pounds (lb)</option></select></label>
             <div className="settings-actions"><span className="status-text">Changes apply to future entries.</span><button className="button" disabled={pending}>Save profile</button></div>
+          </form>
+
+          <div className="library-settings-heading tdee-heading">
+            <div className="eyebrow">Calorie needs</div>
+            <h2>Daily energy estimate</h2>
+            <p>An estimate of what you burn each day, using the Mifflin-St Jeor equation.</p>
+          </div>
+          <form
+            className="settings-group"
+            onSubmit={(event) => {
+              event.preventDefault();
+              saveCalorieNeeds();
+            }}
+          >
+            <div className="settings-row"><span><strong>Sex</strong><small>Required by the estimation equation</small></span><div className="settings-segmented" role="radiogroup" aria-label="Sex">{(["female", "male"] as const).map((option) => <button type="button" key={option} className={sex === option ? "active" : ""} onClick={() => setSex(option)} role="radio" aria-checked={sex === option}>{option === "female" ? "Female" : "Male"}</button>)}</div></div>
+            <label className="settings-row"><span><strong>Age</strong><small>Stored as your birth year so it never goes stale</small></span><span className="settings-input"><input className="field" value={age} onChange={(event) => setAge(event.target.value)} placeholder="30" inputMode="numeric" /><em>years</em></span></label>
+            <label className="settings-row"><span><strong>Current weight</strong><small>{data.latestWeightKg ? "From your latest check-in - adjust to preview" : "Used for the estimate only"}</small></span><span className="settings-input"><input className="field" value={tdeeWeight} onChange={(event) => setTdeeWeight(event.target.value)} placeholder="72.5" inputMode="decimal" /><em>{profileUnit}</em></span></label>
+            <label className="settings-row"><span><strong>Activity level</strong><small>Shapes the daily multiplier</small></span><select className="select-field settings-select" value={activityLevel} onChange={(event) => setActivityLevel(event.target.value as ActivityLevel | "")}><option value="">Choose...</option>{activityLevels.map((level) => <option value={level.value} key={level.value}>{level.label} ({level.hint})</option>)}</select></label>
+            {tdee !== null ? <><div className="tdee-result"><div className="tdee-total"><strong>{tdee.toLocaleString()}</strong><span>kcal / day</span></div><div className="tdee-meta">Resting burn <strong>{bmr!.toLocaleString()}</strong> kcal</div></div><div className="tdee-targets" role="group" aria-label="Choose a daily calorie goal">{calorieTargets.map((target) => <button type="button" className={`tdee-target${calorieGoal === target.value ? " active" : ""}`} aria-pressed={calorieGoal === target.value} key={target.value} onClick={() => setCalorieGoal(target.value)}><span>{target.label}</span><strong>{target.calories.toLocaleString()}</strong></button>)}</div></> : <p className="status-text tdee-note">Fill in sex, age, weight and activity level to see your daily estimate.</p>}
+            <div className="settings-actions"><span className="status-text">{selectedCalorieTarget ? `${selectedCalorieTarget.label} is selected.` : "Choose a goal above to save your guide."}</span><button className="button" disabled={pending || tdee === null || !selectedCalorieTarget}>Save calorie needs</button></div>
           </form>
         </section>
       )}

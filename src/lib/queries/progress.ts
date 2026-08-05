@@ -1,12 +1,13 @@
 import { and, desc, eq, gte, isNotNull } from "drizzle-orm";
 import { getDb } from "@/db";
-import { bodyMetrics, exercises, mealLogs, sessions, setLogs } from "@/db/schema";
+import { bodyMetrics, exercises, mealLogs, sessions, setLogs, users } from "@/db/schema";
 import { aggregateMacros, calculateStreak, dateKey, daysAgoKey, weekCompletion } from "@/lib/metrics";
 
 export async function getProgressData(ownerId: string) {
   const db = getDb();
   const since = daysAgoKey(55);
-  const [completed, workoutSets, meals, body] = await Promise.all([
+  const [profile, completed, workoutSets, meals, body] = await Promise.all([
+    db.select({ calorieGoal: users.calorieGoal, dailyCalorieGoal: users.dailyCalorieGoal }).from(users).where(eq(users.id, ownerId)).limit(1),
     db.select({ sessionDate: sessions.sessionDate }).from(sessions).where(and(eq(sessions.ownerId, ownerId), isNotNull(sessions.completedAt), gte(sessions.sessionDate, since))).orderBy(desc(sessions.sessionDate)),
     db.select({ set: setLogs, exercise: exercises, session: sessions }).from(setLogs).innerJoin(exercises, eq(setLogs.exerciseId, exercises.id)).innerJoin(sessions, eq(setLogs.sessionId, sessions.id)).where(and(eq(sessions.ownerId, ownerId), isNotNull(sessions.completedAt), gte(sessions.sessionDate, since))),
     db.select().from(mealLogs).where(and(eq(mealLogs.ownerId, ownerId), gte(mealLogs.eatenAt, new Date(`${since}T00:00:00`)))).orderBy(mealLogs.eatenAt),
@@ -42,5 +43,5 @@ export async function getProgressData(ownerId: string) {
     const points = Object.entries(exercise.byDate).sort(([a], [b]) => a.localeCompare(b)).map(([date, point]) => ({ date, ...point }));
     return { name: exercise.name, primaryMuscle: exercise.primaryMuscle, points, currentWeightKg: points.at(-1)?.weightKg ?? 0, changeKg: points.length > 1 ? (points.at(-1)?.weightKg ?? 0) - points[0].weightKg : null };
   }).sort((a, b) => b.points.length - a.points.length || b.currentWeightKg - a.currentWeightKg).slice(0, 5);
-  return { streak: calculateStreak(allDates), week: weekCompletion(allDates), completedDates: completed.map((row) => row.sessionDate), volume, currentWeekVolume, previousWeekVolume, muscleTotals, dailyVolume, exerciseProgression, bodyMetrics: body, dailyMacros, hasData: completed.length > 0 || meals.length > 0 || body.length > 0 };
+  return { streak: calculateStreak(allDates), week: weekCompletion(allDates), completedDates: completed.map((row) => row.sessionDate), volume, currentWeekVolume, previousWeekVolume, muscleTotals, dailyVolume, exerciseProgression, bodyMetrics: body, dailyMacros, calorieGoal: profile[0]?.calorieGoal ?? null, dailyCalorieGoal: profile[0]?.dailyCalorieGoal ?? null, hasData: completed.length > 0 || meals.length > 0 || body.length > 0 };
 }

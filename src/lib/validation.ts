@@ -55,8 +55,13 @@ export const bodyMetricSchema = z.object({
   bodyFatPercent: finiteNumber.min(1).max(80).nullable().optional(),
 });
 export const profileSchema = z.object({
-  heightCm: finiteNumber.min(80).max(250).nullable(),
-  preferredUnit: unitSchema,
+  heightCm: finiteNumber.min(80).max(250).nullable().optional(),
+  preferredUnit: unitSchema.optional(),
+  sex: z.enum(["male", "female"]).nullable().optional(),
+  birthYear: z.number().int().min(1900).max(2100).nullable().optional(),
+  activityLevel: z.enum(["sedentary", "light", "moderate", "active", "veryActive"]).nullable().optional(),
+  calorieGoal: z.enum(["cut", "maintain", "bulk"]).nullable().optional(),
+  dailyCalorieGoal: finiteNumber.int().min(0).max(20000).nullable().optional(),
 });
 export const templateSchema = z.object({ name: z.string().trim().min(1).max(80) });
 export const exerciseSchema = z.object({

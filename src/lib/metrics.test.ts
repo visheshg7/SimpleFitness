@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { aggregateMacros, calculateBmi, calculateStreak, calculateVolume, isDateInLoggingWindow, kgFromUnit, loggingWindow, nextTemplatePosition, valueInUnit, weekCompletion } from "./metrics";
+import { activityMultiplier, aggregateMacros, calculateBmi, calculateBmr, calculateCalorieTargets, calculateStreak, calculateTdee, calculateVolume, calorieGoalLabel, isDateInLoggingWindow, kgFromUnit, loggingWindow, nextTemplatePosition, valueInUnit, weekCompletion } from "./metrics";
 
 describe("canonical units", () => {
   it("converts pounds at the UI boundary", () => {
@@ -12,6 +12,33 @@ describe("training metrics", () => {
   it("calculates BMI only when height exists", () => {
     expect(calculateBmi(81, 180)).toBe(25);
     expect(calculateBmi(81, null)).toBeNull();
+  });
+
+  it("calculates Mifflin-St Jeor BMR for men and women", () => {
+    expect(calculateBmr(81, 180, 30, "male")).toBe(1790);
+    expect(calculateBmr(70, 165, 40, "female")).toBe(1370);
+  });
+
+  it("scales BMR to TDEE by activity level", () => {
+    expect(calculateTdee(1790, "moderate")).toBe(2775);
+    expect(calculateTdee(1790, "sedentary")).toBe(2148);
+    expect(calculateTdee(1790, null)).toBeNull();
+  });
+
+  it("exposes the standard activity multipliers", () => {
+    expect(activityMultiplier("veryActive")).toBe(1.9);
+    expect(activityMultiplier("moderate")).toBe(1.55);
+    expect(activityMultiplier(null)).toBeNull();
+  });
+
+  it("builds selectable calorie targets from TDEE", () => {
+    expect(calculateCalorieTargets(2560).map(({ value, label, calories }) => ({ value, label, calories }))).toEqual([
+      { value: "cut", label: "Cut", calories: 2060 },
+      { value: "maintain", label: "Maintain", calories: 2560 },
+      { value: "bulk", label: "Bulk", calories: 2810 },
+    ]);
+    expect(calorieGoalLabel("bulk")).toBe("Bulk");
+    expect(calorieGoalLabel(null)).toBeNull();
   });
 
   it("keeps a streak through consecutive days and gaps", () => {
