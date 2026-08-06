@@ -1,15 +1,29 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 
 type SpeechRecognitionLike = { continuous: boolean; interimResults: boolean; lang: string; start: () => void; stop: () => void; onresult: ((event: { results: ArrayLike<ArrayLike<{ transcript: string }>> }) => void) | null; onerror: (() => void) | null; onend: (() => void) | null };
 
+type SpeechCtor = new () => SpeechRecognitionLike;
+
+function getSpeechCtor(): SpeechCtor | null {
+  if (typeof window === "undefined") return null;
+  const win = window as unknown as { SpeechRecognition?: SpeechCtor; webkitSpeechRecognition?: SpeechCtor };
+  return win.SpeechRecognition ?? win.webkitSpeechRecognition ?? null;
+}
+
+const emptySubscribe = () => () => {};
+
 export function useSpeechInput(onTranscript: (text: string) => void) {
   const recognition = useRef<SpeechRecognitionLike | null>(null);
-  const [supported, setSupported] = useState(false);
+  const supported = useSyncExternalStore(emptySubscribe, () => getSpeechCtor() !== null, () => false);
   const [listening, setListening] = useState(false);
   const [error, setError] = useState("");
-  useEffect(() => { const Speech = (window as unknown as { SpeechRecognition?: new () => SpeechRecognitionLike; webkitSpeechRecognition?: new () => SpeechRecognitionLike }).SpeechRecognition ?? (window as unknown as { webkitSpeechRecognition?: new () => SpeechRecognitionLike }).webkitSpeechRecognition; if (Speech) { setSupported(true); recognition.current = new Speech(); } return () => recognition.current?.stop(); }, []);
+  useEffect(() => {
+    const Speech = getSpeechCtor();
+    if (Speech) recognition.current = new Speech();
+    return () => recognition.current?.stop();
+  }, []);
   function toggle() {
     if (!recognition.current) return;
     if (listening) { recognition.current.stop(); return; }

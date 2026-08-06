@@ -30,5 +30,5 @@ export async function confirmMeal(input: unknown) {
 }
 
 export async function deleteMeal(id: string) {
-  try { const ownerId = await requireSession(); await getDb().delete(mealLogs).where(and(eq(mealLogs.id, id), eq(mealLogs.ownerId, ownerId))); revalidatePath("/history"); revalidatePath("/progress"); return { success: true as const }; } catch (error) { return { success: false as const, error: error instanceof Error ? error.message : "Meal could not be deleted." }; }
+  try { const ownerId = await requireSession(); await getDb().delete(mealLogs).where(and(eq(mealLogs.id, id), eq(mealLogs.ownerId, ownerId))); revalidatePath("/today"); revalidatePath("/history"); revalidatePath("/progress"); return { success: true as const }; } catch (error) { return { success: false as const, error: error instanceof Error ? error.message : "Meal could not be deleted." }; }
 }

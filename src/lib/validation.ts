@@ -1,6 +1,22 @@
 import { z } from "zod";
+import { MUSCLES, normalizeMuscle, type Muscle } from "@/lib/muscles";
 
 const finiteNumber = z.number().finite();
+
+export const muscleSchema = z
+  .string()
+  .trim()
+  .refine((value) => normalizeMuscle(value) !== null, {
+    message: `Target muscle must be one of: ${MUSCLES.join(", ")}`,
+  })
+  .transform((value) => normalizeMuscle(value) as Muscle);
+
+export const muscleInputSchema = z
+  .string()
+  .trim()
+  .min(1)
+  .max(60)
+  .transform((value) => normalizeMuscle(value) ?? value);
 
 export const unitSchema = z.enum(["kg", "lb"]);
 export const setInputSchema = z.object({
@@ -23,7 +39,7 @@ export const parserSetSchema = z.object({
 export const workoutParseSchema = z.object({
   exercises: z.array(z.object({
     name: z.string().trim().min(1).max(120),
-    primaryMuscle: z.string().trim().min(1).max(60),
+    primaryMuscle: muscleInputSchema,
     sets: z.array(parserSetSchema).min(1).max(30),
     notes: z.string().max(500).optional(),
   })).min(1).max(30),
@@ -47,6 +63,17 @@ export const mealParseSchema = z.object({
 
 export const rawTextSchema = z.string().trim().min(1, "Write a little more so it can be parsed.").max(2000);
 export const mealConfirmSchema = mealParseSchema.extend({ rawInput: rawTextSchema, mealDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/) });
+export const exerciseGuidanceSchema = z.object({
+  steps: z.array(z.string().trim().min(1).max(600)).length(4),
+  tip: z.string().trim().min(1).max(600),
+});
+export const exerciseAnswerSchema = z.object({
+  answer: z.string().trim().min(1).max(2000),
+});
+export const exerciseQuestionInputSchema = z.object({
+  exerciseId: z.string().uuid(),
+  question: rawTextSchema,
+});
 export const bodyMetricSchema = z.object({
   metricDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
   weight: finiteNumber.min(20).max(500),
@@ -66,10 +93,12 @@ export const profileSchema = z.object({
 export const templateSchema = z.object({ name: z.string().trim().min(1).max(80) });
 export const exerciseSchema = z.object({
   name: z.string().trim().min(1).max(100),
-  primaryMuscle: z.string().trim().min(1).max(60),
-  secondaryMuscles: z.array(z.string().trim().min(1).max(60)).max(8),
+  primaryMuscle: muscleSchema,
+  secondaryMuscles: z.array(muscleInputSchema).max(8),
   defaultUnit: unitSchema,
 });
 
 export type WorkoutParse = z.infer<typeof workoutParseSchema>;
 export type MealParse = z.infer<typeof mealParseSchema>;
+export type ExerciseGuidance = z.infer<typeof exerciseGuidanceSchema>;
+export type ExerciseAnswer = z.infer<typeof exerciseAnswerSchema>;

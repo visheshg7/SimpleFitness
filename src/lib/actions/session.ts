@@ -7,7 +7,7 @@ import { getDb } from "@/db";
 import { exercises, sessionExercises, sessions, setLogs, templateExercises } from "@/db/schema";
 import { requireSession } from "@/lib/auth";
 import { isDateInLoggingWindow, kgFromUnit } from "@/lib/metrics";
-import { parserSetSchema, setInputSchema, unitSchema } from "@/lib/validation";
+import { muscleSchema, parserSetSchema, setInputSchema, unitSchema } from "@/lib/validation";
 
 const failure = (error: unknown) => ({ success: false as const, error: error instanceof Error && error.message !== "UNAUTHENTICATED" ? error.message : "That change could not be saved." });
 
@@ -87,7 +87,7 @@ const sessionExerciseSchema = z.object({
 const newExerciseQuickLogSchema = z.object({
   sessionId: z.string().uuid(),
   name: z.string().trim().min(1).max(100),
-  primaryMuscle: z.string().trim().min(1).max(60),
+  primaryMuscle: muscleSchema,
   sets: z.array(parserSetSchema.extend({ unit: unitSchema.optional() })).min(1).max(30),
   defaultUnit: unitSchema,
 });

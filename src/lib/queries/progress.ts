@@ -2,6 +2,7 @@ import { and, desc, eq, gte, isNotNull } from "drizzle-orm";
 import { getDb } from "@/db";
 import { bodyMetrics, exercises, mealLogs, sessions, setLogs, users } from "@/db/schema";
 import { aggregateMacros, calculateStreak, dateKey, daysAgoKey, weekCompletion } from "@/lib/metrics";
+import { normalizeMuscle } from "@/lib/muscles";
 
 export async function getProgressData(ownerId: string) {
   const db = getDb();
@@ -23,7 +24,7 @@ export async function getProgressData(ownerId: string) {
   previousWeekStart.setDate(previousWeekStart.getDate() - 7);
   const currentWeekVolume = workoutSets.filter((row) => new Date(`${row.session.sessionDate}T12:00:00`) >= currentWeekStart).reduce((total, row) => total + (row.set.completed && row.set.weightKg && row.set.reps ? row.set.weightKg * row.set.reps : 0), 0);
   const previousWeekVolume = workoutSets.filter((row) => { const date = new Date(`${row.session.sessionDate}T12:00:00`); return date >= previousWeekStart && date < currentWeekStart; }).reduce((total, row) => total + (row.set.completed && row.set.weightKg && row.set.reps ? row.set.weightKg * row.set.reps : 0), 0);
-  const muscleTotals = workoutSets.filter((row) => row.session.sessionDate >= daysAgoKey(6)).reduce<Record<string, number>>((totals, row) => { if (row.set.completed) totals[row.exercise.primaryMuscle] = (totals[row.exercise.primaryMuscle] ?? 0) + 1; return totals; }, {});
+  const muscleTotals = workoutSets.filter((row) => row.session.sessionDate >= daysAgoKey(6)).reduce<Record<string, number>>((totals, row) => { if (row.set.completed) { const muscle = normalizeMuscle(row.exercise.primaryMuscle) ?? row.exercise.primaryMuscle; totals[muscle] = (totals[muscle] ?? 0) + 1; } return totals; }, {});
   const dailyMacros = Object.values(aggregateMacros(meals.map((meal) => ({ date: dateKey(new Date(meal.eatenAt)), calories: meal.calories, protein: meal.protein, carbs: meal.carbs, fat: meal.fat })))).sort((a, b) => a.date.localeCompare(b.date));
   const dailyVolume = Object.entries(workoutSets.reduce<Record<string, number>>((totals, row) => {
     if (row.set.completed && row.set.weightKg !== null && row.set.reps !== null) {

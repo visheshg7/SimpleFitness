@@ -34,7 +34,7 @@ export async function getTodayData(ownerId: string, today = dateKey(new Date()))
   const currentSets = activeSession
     ? await db.select().from(setLogs).where(eq(setLogs.sessionId, activeSession.id)).orderBy(asc(setLogs.exerciseId), asc(setLogs.setNumber))
     : [];
-  const previousSets = await db.select({ set: setLogs, session: sessions }).from(setLogs).innerJoin(sessions, eq(setLogs.sessionId, sessions.id)).where(and(eq(sessions.ownerId, ownerId), lt(sessions.sessionDate, today), isNotNull(sessions.completedAt))).orderBy(desc(sessions.sessionDate), asc(setLogs.setNumber));
+  const previousSets = await db.select({ set: setLogs, session: sessions }).from(setLogs).innerJoin(sessions, eq(setLogs.sessionId, sessions.id)).where(and(eq(sessions.ownerId, ownerId), lt(sessions.sessionDate, today), isNotNull(sessions.completedAt), eq(setLogs.completed, true))).orderBy(desc(sessions.sessionDate), asc(setLogs.setNumber));
 
   // Once a session starts, its own plan is the source of truth. This lets a
   // workout flex without rewriting the template used for later sessions.
@@ -56,7 +56,23 @@ export async function getTodayData(ownerId: string, today = dateKey(new Date()))
     const sets = currentSets.filter((set) => set.exerciseId === exercise.id);
     const previous = previousSets.filter(({ set }) => set.exerciseId === exercise.id);
     const previousSessionId = previous[0]?.session.id;
-    const personalBestWeightKg = previous.reduce<number | null>((best, { set }) => {
+    // PR history is completed weighted sets from completed sessions on or
+    // before the selected day. A completed selected session counts; active
+    // drafts and future sessions do not.
+    const eligible = [
+      ...(activeSession?.completedAt ? sets.filter((set) => set.completed).map((set) => ({ set, sessionDate: today })) : []),
+      ...previous.map(({ set, session }) => ({ set, sessionDate: session.sessionDate })),
+    ];
+    const weighted = eligible.filter(({ set }) => set.completed && set.weightKg !== null && set.reps !== null && set.reps > 0);
+    const personalBestSet = weighted.reduce<{ weightKg: number; reps: number; sessionDate: string; setNumber: number } | null>((best, { set, sessionDate }) => {
+      const candidate = { weightKg: set.weightKg!, reps: set.reps!, sessionDate, setNumber: set.setNumber };
+      if (!best) return candidate;
+      if (candidate.weightKg !== best.weightKg) return candidate.weightKg > best.weightKg ? candidate : best;
+      if (candidate.reps !== best.reps) return candidate.reps > best.reps ? candidate : best;
+      if (candidate.sessionDate !== best.sessionDate) return candidate.sessionDate < best.sessionDate ? candidate : best;
+      return candidate.setNumber < best.setNumber ? candidate : best;
+    }, null);
+    const personalBestWeightKg = eligible.reduce<number | null>((best, { set }) => {
       if (!set.completed || set.weightKg === null) return best;
       return best === null ? set.weightKg : Math.max(best, set.weightKg);
     }, null);
@@ -65,10 +81,12 @@ export async function getTodayData(ownerId: string, today = dateKey(new Date()))
       sessionExerciseId,
       name: exercise.name,
       primaryMuscle: exercise.primaryMuscle,
+      secondaryMuscles: exercise.secondaryMuscles,
       targetSets,
       targetReps,
       sets,
       lastSession: previousSessionId ? previous.filter(({ session }) => session.id === previousSessionId).map(({ set }) => set) : [],
+      personalBestSet: personalBestSet ? { weightKg: personalBestSet.weightKg, reps: personalBestSet.reps } : null,
       personalBestWeightKg,
     };
   });
@@ -76,6 +94,16 @@ export async function getTodayData(ownerId: string, today = dateKey(new Date()))
   const dates = completedSessions.map((session) => session.sessionDate);
   const currentDate = dateKey(new Date());
   const dailyFuel = aggregateMacros(meals.map((meal) => ({ date: today, calories: meal.calories, protein: meal.protein, carbs: meal.carbs, fat: meal.fat })))[today] ?? null;
+  const mealRows = meals.map((meal) => ({
+    id: meal.id,
+    eatenAt: meal.eatenAt.toISOString(),
+    rawInput: meal.rawInput,
+    parsedItems: meal.parsedItems,
+    calories: meal.calories,
+    protein: meal.protein,
+    carbs: meal.carbs,
+    fat: meal.fat,
+  }));
   return {
     profile,
     templates,
@@ -85,6 +113,7 @@ export async function getTodayData(ownerId: string, today = dateKey(new Date()))
     selectedTemplateId,
     exercises: exercisesForToday,
     dailyFuel,
+    meals: mealRows,
     library,
     streak: calculateStreak(dates),
     week: weekCompletion(dates),
