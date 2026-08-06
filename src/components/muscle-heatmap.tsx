@@ -19,7 +19,7 @@ const HAIR_FILL = "#1B1C20";
 const STROKE_COLOR = "#55585F";
 
 const heatScale = new HeatmapColorScale(
-  ["#7A3023", "#E8402C", "#F5C24C"],
+  ["#F5C24C", "#D45f48", "#E8402C"],
   ColorInterpolation.easeInOut
 );
 
