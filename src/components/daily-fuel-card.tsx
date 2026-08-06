@@ -7,21 +7,27 @@ export type DailyFuelData = {
   fat: number;
 };
 
-export function DailyFuelCard({ data, targetCalories, targetLabel, subtitle, emptyMessage, footer, onLogMeal }: { data: DailyFuelData | null; targetCalories?: number | null; targetLabel?: string | null; subtitle: string; emptyMessage: string; footer: string; onLogMeal?: () => void }) {
+export function DailyFuelCard({ data, targetCalories, targetLabel, subtitle, emptyMessage, footer, onLogMeal, onOpenDetails }: { data: DailyFuelData | null; targetCalories?: number | null; targetLabel?: string | null; subtitle: string; emptyMessage: string; footer: string; onLogMeal?: () => void; onOpenDetails?: () => void }) {
   const target = typeof targetCalories === "number" && targetCalories > 0 ? targetCalories : null;
   const progress = data && target !== null ? Math.min(100, (data.calories / target) * 100) : 0;
   const difference = data && target !== null ? Math.round(data.calories - target) : null;
 
-  return <section className="progress-card macro-card daily-fuel-card">
+  const facts = data ? <>
+    <div className="macro-total"><strong>{data.calories ? `${Math.round(data.calories).toLocaleString()}` : "—"}</strong><span>kcal</span></div>
+    {target !== null && <FuelGuide difference={difference} label={targetLabel} progress={progress} targetCalories={target} />}
+    <MacroRow label="Protein" value={data.protein} color="var(--accent)" total={macroTotal(data)} />
+    <MacroRow label="Carbs" value={data.carbs} color="var(--warm)" total={macroTotal(data)} />
+    <MacroRow label="Fat" value={data.fat} color="var(--coral)" total={macroTotal(data)} />
+    <span className="chart-note">{footer}</span>
+  </> : <>{target !== null && <FuelGuide label={targetLabel} progress={progress} targetCalories={target} />}<div className="progress-empty daily-fuel-empty">{onOpenDetails ? <button className="fuel-empty-copy" type="button" onClick={onOpenDetails}>{emptyMessage}</button> : <p>{emptyMessage}</p>}{onLogMeal && <button className="button small citrus" onClick={onLogMeal}>Log a meal</button>}</div></>;
+
+  const body = onOpenDetails && data
+    ? <div className="fuel-card-body" role="button" tabIndex={0} aria-label="Open meal details for this day" onClick={onOpenDetails} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); onOpenDetails(); } }}>{facts}</div>
+    : facts;
+
+  return <section className="progress-card daily-fuel-card">
     <div className="progress-card-heading"><div><h2>Daily fuel</h2><p>{subtitle}</p></div><Utensils size={18} className="card-icon fuel-icon" /></div>
-    {data ? <>
-      <div className="macro-total"><strong>{data.calories ? `${Math.round(data.calories).toLocaleString()}` : "—"}</strong><span>kcal</span></div>
-      {target !== null && <FuelGuide difference={difference} label={targetLabel} progress={progress} targetCalories={target} />}
-      <MacroRow label="Protein" value={data.protein} color="var(--accent)" total={macroTotal(data)} />
-      <MacroRow label="Carbs" value={data.carbs} color="var(--warm)" total={macroTotal(data)} />
-      <MacroRow label="Fat" value={data.fat} color="var(--coral)" total={macroTotal(data)} />
-      <span className="chart-note">{footer}</span>
-    </> : <>{target !== null && <FuelGuide label={targetLabel} progress={progress} targetCalories={target} />}<div className="progress-empty daily-fuel-empty"><p>{emptyMessage}</p>{onLogMeal && <button className="button small citrus" onClick={onLogMeal}>Log a meal</button>}</div></>}
+    {body}
   </section>;
 }
 

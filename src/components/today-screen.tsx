@@ -1,17 +1,17 @@
 "use client";
 
 import { forwardRef, memo, useCallback, useEffect, useImperativeHandle, useRef, useState, useTransition } from "react";
-import { ArrowRightLeft, Check, ChevronLeft, ChevronRight, ClipboardList, Dumbbell, Mic, Pencil, PersonStanding, Plus, RotateCcw, Sparkle, Trash2, UtensilsCrossed, X } from "lucide-react";
+import { ArrowRightLeft, Check, ChevronDown, ChevronLeft, ChevronRight, Dumbbell, Droplet, Flame, Link2, Mic, Pencil, PersonStanding, Plus, RotateCcw, Sparkle, Trash2, UtensilsCrossed, Wheat, X } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { DailyFuelCard } from "@/components/daily-fuel-card";
 import { MuscleSelect } from "@/components/muscle-select";
 import { saveBodyMetric } from "@/lib/actions/body";
-import { parseWorkoutText } from "@/lib/actions/ai";
-import { confirmMeal, parseMealText } from "@/lib/actions/meal";
+import { askExerciseQuestion, generateExerciseGuidance, parseWorkoutText } from "@/lib/actions/ai";
+import { confirmMeal, deleteMeal, parseMealText } from "@/lib/actions/meal";
 import { addExerciseToSession, cancelSession, chooseTemplate, createExerciseAndLogQuickSets, deleteSet, finishSession, logQuickSets, removeExerciseFromSession, replaceSessionExercise, resetExerciseSets, saveSet, saveSets, startSession } from "@/lib/actions/session";
 import { getTodayData } from "@/lib/queries/today";
 import { calculateBmi, calorieGoalLabel, kgFromUnit, valueInUnit } from "@/lib/metrics";
-import type { MealParse, WorkoutParse } from "@/lib/validation";
+import type { ExerciseAnswer, ExerciseGuidance, MealParse, WorkoutParse } from "@/lib/validation";
 import { useSpeechInput } from "./speech-input";
 
 type TodayData = Awaited<ReturnType<typeof getTodayData>>;
@@ -34,9 +34,11 @@ function sameLocalSet(a: LocalSet, b: LocalSet) {
 export function TodayScreen({ data }: { data: TodayData }) {
   const router = useRouter();
   const [mealOpen, setMealOpen] = useState(false);
+  const [mealDetailsOpen, setMealDetailsOpen] = useState(false);
   const [bodyOpen, setBodyOpen] = useState(false);
   const [addExerciseOpen, setAddExerciseOpen] = useState(false);
   const [swapExercise, setSwapExercise] = useState<ExerciseData | null>(null);
+  const [selectedExercise, setSelectedExercise] = useState<ExerciseData | null>(null);
   const [actionError, setActionError] = useState("");
   const [pending, startTransition] = useTransition();
   const selectedDayRef = useRef<HTMLButtonElement>(null);
@@ -152,6 +154,7 @@ export function TodayScreen({ data }: { data: TodayData }) {
           data={exercise}
           key={exercise.sessionExerciseId ?? exercise.id}
           ref={(handle) => { exerciseRefs.current[exercise.id] = handle; }}
+          onOpenDetails={() => setSelectedExercise(exercise)}
           onRemove={!isComplete ? () => window.confirm(`Remove ${exercise.name} from this workout? Its logged sets will be deleted.`) && refreshAfter(() => removeExerciseFromSession({ sessionId: data.session!.id, exerciseId: exercise.id })) : undefined}
           onReset={() => refreshAfter(() => resetExerciseSets({ sessionId: data.session!.id, exerciseId: exercise.id }))}
           onSwap={!isComplete ? () => setSwapExercise(exercise) : undefined}
@@ -160,7 +163,7 @@ export function TodayScreen({ data }: { data: TodayData }) {
           unit={data.profile.preferredUnit}
         />)}
       </div> : <div className="exercise-plan-list" aria-label="Planned exercises">
-        {data.exercises.map((exercise, index) => <PrestartExerciseRow data={exercise} index={index} key={exercise.sessionExerciseId ?? exercise.id} />)}
+        {data.exercises.map((exercise, index) => <PrestartExerciseRow data={exercise} index={index} key={exercise.sessionExerciseId ?? exercise.id} onOpenDetails={() => setSelectedExercise(exercise)} />)}
       </div> : <div className="empty-state inverse-empty"><strong>No movements yet.</strong>Add exercises in Library or add them after starting.</div>}
 
       {isStarted && !isComplete && <button className="add-exercise" onClick={() => setAddExerciseOpen(true)}><Plus size={16} /> Add an exercise</button>}
@@ -188,16 +191,18 @@ export function TodayScreen({ data }: { data: TodayData }) {
       </div>
     </section>
 
-    <DailyFuelCard data={data.dailyFuel} targetCalories={data.profile.dailyCalorieGoal} targetLabel={calorieGoalLabel(data.profile.calorieGoal)} subtitle="Confirmed meal estimates for this day." emptyMessage="No meals logged for this day yet. Add one to see your fuel totals." footer="Estimates are for direction, not precision." onLogMeal={() => setMealOpen(true)} />
+    <DailyFuelCard data={data.dailyFuel} targetCalories={data.profile.dailyCalorieGoal} targetLabel={calorieGoalLabel(data.profile.calorieGoal)} subtitle="Confirmed meal estimates for this day." emptyMessage="No meals logged for this day yet. Add one to see your fuel totals." footer="Estimates are for direction, not precision." onLogMeal={() => setMealOpen(true)} onOpenDetails={() => setMealDetailsOpen(true)} />
 
     {mealOpen && <MealSheet data={data} onClose={() => setMealOpen(false)} />}
+    {mealDetailsOpen && <MealDetailsSheet data={data} onClose={() => setMealDetailsOpen(false)} />}
     {bodyOpen && <BodySheet data={data} onClose={() => setBodyOpen(false)} />}
     {addExerciseOpen && data.session && <AddExerciseSheet data={data} onClose={() => setAddExerciseOpen(false)} />}
     {swapExercise && <SwapExerciseSheet data={data} exercise={swapExercise} onClose={() => setSwapExercise(null)} />}
+    {selectedExercise && <ExerciseDetailsSheet key={selectedExercise.id} data={data} exercise={selectedExercise} onClose={() => setSelectedExercise(null)} />}
   </>;
 }
 
-const ExerciseRow = forwardRef<ExerciseRowHandle, { data: ExerciseData; unit: "kg" | "lb"; sessionId?: string; started: boolean; onSwap?: () => void; onReset?: () => void; onRemove?: () => void }>(function ExerciseRow({ data, unit, sessionId, started, onSwap, onReset, onRemove }, ref) {
+const ExerciseRow = forwardRef<ExerciseRowHandle, { data: ExerciseData; unit: "kg" | "lb"; sessionId?: string; started: boolean; onOpenDetails: () => void; onSwap?: () => void; onReset?: () => void; onRemove?: () => void }>(function ExerciseRow({ data, unit, sessionId, started, onOpenDetails, onSwap, onReset, onRemove }, ref) {
   const toLocalSet = useCallback((set: ExerciseData["sets"][number]): LocalSet => ({
     id: set.id,
     setNumber: set.setNumber,
@@ -392,10 +397,10 @@ const ExerciseRow = forwardRef<ExerciseRowHandle, { data: ExerciseData; unit: "k
 
   return <div className="exercise-row">
     <div className="exercise-heading">
-      <div>
-        <div className="exercise-name">{data.name}</div>
-        <div className="exercise-muscle">{data.primaryMuscle}{data.targetReps ? ` · ${data.targetSets ?? ""} × ${data.targetReps}` : ""}</div>
-      </div>
+      <button className="exercise-name-trigger" type="button" onClick={onOpenDetails}>
+        <span className="exercise-name">{data.name}</span>
+        <span className="exercise-muscle">{data.primaryMuscle}{data.targetReps ? ` · ${data.targetSets ?? ""} × ${data.targetReps}` : ""}</span>
+      </button>
        <div className="exercise-actions">
          {data.lastSession.length > 0 && <div className="last-reference">Last <strong>{data.lastSession.map((set) => `${set.weightKg ? valueInUnit(set.weightKg, unit)?.toFixed(0) : "-"}${set.weightKg ? unit : ""} x ${set.reps ?? "-"}`).join(", ")}</strong></div>}
          <div className="exercise-action-buttons">
@@ -457,8 +462,8 @@ const SetRow = memo(function SetRow({ set, unit, saving, isPr, isEditing, onPatc
   </div>;
 });
 
-function PrestartExerciseRow({ data, index }: { data: ExerciseData; index: number }) {
-  return <article className="exercise-plan-row">
+function PrestartExerciseRow({ data, index, onOpenDetails }: { data: ExerciseData; index: number; onOpenDetails: () => void }) {
+  return <button className="exercise-plan-row" type="button" onClick={onOpenDetails}>
     <span className="exercise-plan-index">{String(index + 1).padStart(2, "0")}</span>
     <span className="exercise-plan-copy">
       <span className="exercise-name">{data.name}</span>
@@ -466,7 +471,7 @@ function PrestartExerciseRow({ data, index }: { data: ExerciseData; index: numbe
     </span>
     <span className="exercise-plan-target">{data.targetSets ?? "-"} sets <span>×</span> {data.targetReps ?? "-"} reps</span>
     <ChevronRight className="exercise-plan-chevron" size={17} />
-  </article>;
+  </button>;
 }
 
 function AdjustableNumber({ label, value, step, inputMode, disabled = false, onChange }: { label: string; value: string; step: number; inputMode: "decimal" | "numeric"; disabled?: boolean; onChange: (value: string) => void }) {
@@ -723,4 +728,221 @@ function BodySheet({ data, onClose }: { data: TodayData; onClose: () => void }) 
   const bmi = calculateBmi(kgFromUnit(Number(weight), unit) ?? 0, Number(height) || null);
   function submit() { startTransition(async () => { const result = await saveBodyMetric({ metricDate: data.today, weight: Number(weight), unit, heightCm: height ? Number(height) : null, bodyFatPercent: bodyFat ? Number(bodyFat) : null }); if (result.success) { router.refresh(); onClose(); } else setError(result.error); }); }
    return <div className="sheet-backdrop centered-sheet-backdrop" role="dialog" aria-modal="true" aria-labelledby="body-title"><div className="sheet centered-sheet"><div className="sheet-heading"><div><h2 className="sheet-title" id="body-title">Body check-in</h2></div><button className="sheet-close" onClick={onClose} aria-label="Close"><X size={20} /></button></div><div className="form-grid"><label className="form-group"><span className="form-label">Weight</span><div className="unit-input"><input className="field" type="number" inputMode="decimal" value={weight} onChange={(event) => setWeight(event.target.value)} placeholder="72.5" /><select className="select-field" value={unit} onChange={(event) => setUnit(event.target.value as "kg" | "lb")}><option>kg</option><option>lb</option></select></div></label><label className="form-group"><span className="form-label">Height (cm)</span><input className="field" type="number" value={height} onChange={(event) => setHeight(event.target.value)} placeholder="180" /></label><label className="form-group"><span className="form-label">Body fat % (optional)</span><input className="field" type="number" value={bodyFat} onChange={(event) => setBodyFat(event.target.value)} placeholder="18" /></label></div>{bmi ? <p className="notice spaced-notice">BMI: <strong>{bmi.toFixed(1)}</strong> based on the height entered today.</p> : <p className="status-text spaced-notice">Enter height to calculate BMI. Saved height is prefilled when available.</p>}{error && <p className="error-text">{error}</p>}<div className="sheet-actions"><button className="button ghost" onClick={onClose}>Cancel</button><button className="button" disabled={pending || !weight} onClick={submit}>{pending ? "Saving..." : "Save check-in"}</button></div></div></div>;
+}
+
+type MealDetailsData = TodayData["meals"][number];
+
+function formatUnitWeight(valueKg: number | null | undefined, unit: "kg" | "lb") {
+  const value = valueInUnit(valueKg, unit);
+  return value === null ? "" : `${value.toFixed(1).replace(/\.0$/, "")} ${unit}`;
+}
+
+function formatItemNutrition(item: MealDetailsData["parsedItems"][number]) {
+  const parts: string[] = [];
+  if (item.calories !== undefined && item.calories !== null) parts.push(`${formatMealValue(item.calories)} kcal`);
+  if (item.protein !== undefined && item.protein !== null) parts.push(`${formatMealValue(item.protein)}g protein`);
+  if (item.carbs !== undefined && item.carbs !== null) parts.push(`${formatMealValue(item.carbs)}g carbs`);
+  if (item.fat !== undefined && item.fat !== null) parts.push(`${formatMealValue(item.fat)}g fat`);
+  return parts.length ? parts.join(" · ") : "No estimates";
+}
+
+function formatMealValue(value: number | null | undefined) {
+  return value === null || value === undefined ? "—" : value.toLocaleString("en-US", { maximumFractionDigits: 1 });
+}
+
+function MealMacro({ icon: Icon, value, unit, label, tone }: { icon: typeof Flame; value: number | null | undefined; unit?: string; label: string; tone: "calories" | "protein" | "carbs" | "fat" }) {
+  return <div className={`meal-macro meal-macro-${tone}`}>
+    <Icon size={22} strokeWidth={2.5} aria-hidden="true" />
+    <div><strong>{formatMealValue(value)}{unit && <small> {unit}</small>}</strong><span>{label}</span></div>
+  </div>;
+}
+
+function ExerciseDetailsSheet({ data, exercise, onClose }: { data: TodayData; exercise: ExerciseData; onClose: () => void }) {
+  const unit = data.profile.preferredUnit;
+  const requestIdRef = useRef(0);
+  const startedRef = useRef(false);
+  const [guidanceLoading, setGuidanceLoading] = useState(false);
+  const [guidance, setGuidance] = useState<ExerciseGuidance | null>(null);
+  const [guidanceError, setGuidanceError] = useState("");
+  const [question, setQuestion] = useState("");
+  const [answer, setAnswer] = useState<ExerciseAnswer | null>(null);
+  const [answerError, setAnswerError] = useState("");
+  const [answerLoading, setAnswerLoading] = useState(false);
+
+  function requestGuidance() {
+    const requestId = ++requestIdRef.current;
+    setGuidanceLoading(true);
+    setGuidanceError("");
+    setGuidance(null);
+    setQuestion("");
+    setAnswer(null);
+    setAnswerError("");
+    void (async () => {
+      const result = await generateExerciseGuidance(exercise.id);
+      if (requestId !== requestIdRef.current) return;
+      setGuidanceLoading(false);
+      if (result.success) setGuidance(result.data);
+      else setGuidanceError(result.error ?? "Guidance could not be generated right now.");
+    })();
+  }
+
+  useEffect(() => {
+    if (startedRef.current) return;
+    startedRef.current = true;
+    requestGuidance();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  function askQuestion() {
+    if (!question.trim() || answerLoading) return;
+    const requestId = requestIdRef.current;
+    setAnswerError("");
+    setAnswerLoading(true);
+    void (async () => {
+      const result = await askExerciseQuestion({ exerciseId: exercise.id, question });
+      if (requestId !== requestIdRef.current) return;
+      setAnswerLoading(false);
+      if (result.success) setAnswer(result.data);
+      else setAnswerError(result.error ?? "That question could not be answered right now.");
+    })();
+  }
+
+  const muscles = exercise.secondaryMuscles.length ? [exercise.primaryMuscle, ...exercise.secondaryMuscles] : [exercise.primaryMuscle];
+  const lastWorkoutCount = exercise.lastSession.length;
+
+  return <div className="sheet-backdrop" role="dialog" aria-modal="true" aria-labelledby="exercise-details-title">
+    <div className="sheet exercise-details-sheet">
+      <div className="sheet-heading">
+        <div>
+          <div className="eyebrow">Exercise details</div>
+          <h2 className="sheet-title" id="exercise-details-title">{exercise.name}</h2>
+        </div>
+        <button className="sheet-close" onClick={onClose} aria-label="Close"><X size={20} /></button>
+      </div>
+
+      <div className="exercise-facts">
+        <section className="exercise-fact-card" aria-labelledby="target-muscles-label">
+          <h3 className="exercise-fact-label" id="target-muscles-label">Target muscles</h3>
+          <div className="muscle-chips">{muscles.map((muscle) => <span className="muscle-chip" key={muscle}>{muscle}</span>)}</div>
+        </section>
+        <section className="exercise-fact-card" aria-labelledby="last-workout-label">
+          <h3 className="exercise-fact-label" id="last-workout-label">Last workout</h3>
+          {lastWorkoutCount ? <ul className="fact-set-list">{exercise.lastSession.map((set) => <li key={set.id}>
+            <span className="fact-set-number">Set {set.setNumber}</span>
+            <span className="fact-set-value">{set.weightKg !== null && set.weightKg > 0 ? formatUnitWeight(set.weightKg, unit) : "Bodyweight"}{set.reps ? ` × ${set.reps}` : ""}</span>
+          </li>)}</ul> : <p className="fact-empty">No completed workout before this day.</p>}
+        </section>
+      </div>
+
+      <section className="exercise-fact-card pr-card" aria-labelledby="pr-label">
+        <h3 className="exercise-fact-label" id="pr-label">Personal record</h3>
+        {exercise.personalBestSet ? <p className="pr-value">{formatUnitWeight(exercise.personalBestSet.weightKg, unit)}<span> × {exercise.personalBestSet.reps}</span></p> : <p className="fact-empty">No PR yet.</p>}
+      </section>
+
+      <section className="ai-block" aria-labelledby="ai-guidance-title">
+        <div className="ai-block-heading"><h3 className="ai-block-title" id="ai-guidance-title"><Sparkle size={15} /> How to do it</h3></div>
+        {guidanceLoading ? <p className="ai-loading" role="status"><span className="spinner" aria-hidden="true" /> Generating form guidance...</p>
+          : guidanceError ? <div className="ai-error"><p className="error-text">{guidanceError}</p><button className="button small" type="button" onClick={requestGuidance}>Try again</button></div>
+          : guidance ? <><ol className="guidance-steps">{guidance.steps.map((step, index) => <li key={index}>{step}</li>)}</ol><p className="guidance-tip"><strong>Form tip:</strong> {guidance.tip}</p></>
+          : null}
+        <form className="ai-question" onSubmit={(event) => { event.preventDefault(); askQuestion(); }}>
+          <div className="ai-question-field">
+            <input className="field" placeholder="Ask about this exercise..." value={question} onChange={(event) => setQuestion(event.target.value)} aria-label="Ask a question about this exercise" />
+            <button className="icon-button" type="submit" disabled={!question.trim() || answerLoading} aria-label="Ask"><Sparkle size={17} /></button>
+          </div>
+          {answerLoading && <p className="status-text">Thinking...</p>}
+          {answerError && <p className="error-text">{answerError}</p>}
+          {answer && <div className="ai-answer"><p>{answer.answer}</p></div>}
+        </form>
+        <p className="ai-disclaimer">AI guidance is general fitness information, not medical advice. It never replaces professional guidance and never blocks you from logging a workout.</p>
+      </section>
+
+      <div className="sheet-actions"><button className="button" onClick={onClose}>Close</button></div>
+    </div>
+  </div>;
+}
+
+function MealDetailsSheet({ data, onClose }: { data: TodayData; onClose: () => void }) {
+  const router = useRouter();
+  const [removedIds, setRemovedIds] = useState<Set<string>>(new Set());
+  const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [error, setError] = useState("");
+  const [, startTransition] = useTransition();
+  const meals = data.meals.filter((meal) => !removedIds.has(meal.id));
+  const dateLabel = new Date(`${data.today}T12:00:00`).toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" });
+  const itemCount = meals.reduce((count, meal) => count + meal.parsedItems.length, 0);
+  const totals = meals.reduce((sum, meal) => ({
+    calories: sum.calories + (meal.calories ?? 0),
+    protein: sum.protein + (meal.protein ?? 0),
+    carbs: sum.carbs + (meal.carbs ?? 0),
+    fat: sum.fat + (meal.fat ?? 0),
+  }), { calories: 0, protein: 0, carbs: 0, fat: 0 });
+
+  function removeMeal(id: string) {
+    if (deletingId) return;
+    setDeletingId(id);
+    setError("");
+    startTransition(async () => {
+      const result = await deleteMeal(id);
+      if (result.success) {
+        setRemovedIds((current) => new Set(current).add(id));
+        router.refresh();
+      } else {
+        setError(result.error ?? "The meal could not be deleted.");
+      }
+      setDeletingId(null);
+    });
+  }
+
+  return <div className="sheet-backdrop meal-details-backdrop" role="dialog" aria-modal="true" aria-labelledby="meal-details-title">
+    <div className="sheet meal-details-sheet">
+      <div className="meal-details-heading">
+        <div>
+          <div className="eyebrow">{dateLabel}</div>
+          <h2 className="sheet-title" id="meal-details-title">Meal details</h2>
+          <p className="sheet-intro">Confirmed meal estimates for this day.<br />Estimates are for direction, not precision.</p>
+        </div>
+        <button className="sheet-close" onClick={onClose} aria-label="Close"><X size={22} /></button>
+      </div>
+      {meals.length ? <>
+        <div className="meal-list">
+          {meals.map((meal) => {
+            return <article className="meal-detail-row" key={meal.id}>
+              <div className="meal-detail-head">
+                <div className="meal-detail-copy">
+                  <p className="meal-detail-label">{meal.rawInput}</p>
+                </div>
+                <div className="meal-detail-actions">
+                  {deletingId === meal.id && <span className="meal-deleting">Deleting...</span>}
+                  <button className="meal-delete" type="button" disabled={deletingId !== null} onClick={() => removeMeal(meal.id)} aria-label={`Delete ${meal.rawInput}`} title="Delete meal"><Trash2 size={17} /></button>
+                </div>
+              </div>
+              <div className="meal-detail-macros">
+                <MealMacro icon={Flame} value={meal.calories} label="kcal" tone="calories" />
+                <MealMacro icon={Link2} value={meal.protein} unit="g" label="protein" tone="protein" />
+                <MealMacro icon={Wheat} value={meal.carbs} unit="g" label="carbs" tone="carbs" />
+                <MealMacro icon={Droplet} value={meal.fat} unit="g" label="fat" tone="fat" />
+              </div>
+              {meal.parsedItems.length > 0 && <details className="meal-items">
+                <summary><span>{meal.parsedItems.length} {meal.parsedItems.length === 1 ? "item" : "items"}</span><ChevronDown size={18} aria-hidden="true" /></summary>
+                <ul>{meal.parsedItems.map((item, index) => <li key={index}>
+                  <span className="meal-item-name">{item.name}{item.quantity ? <span className="meal-item-quantity"> · {item.quantity}</span> : null}</span>
+                  <span className="meal-item-macros">{formatItemNutrition(item)}</span>
+                </li>)}</ul>
+              </details>}
+            </article>;
+          })}
+        </div>
+        <section className="meal-totals" aria-label="Meal totals">
+          <div className="meal-totals-copy"><strong>Meal totals</strong><span>{meals.length} {meals.length === 1 ? "meal" : "meals"} · {itemCount} {itemCount === 1 ? "item" : "items"}</span></div>
+          <MealMacro icon={Flame} value={totals.calories} label="kcal" tone="calories" />
+          <MealMacro icon={Link2} value={totals.protein} unit="g" label="protein" tone="protein" />
+          <MealMacro icon={Wheat} value={totals.carbs} unit="g" label="carbs" tone="carbs" />
+          <MealMacro icon={Droplet} value={totals.fat} unit="g" label="fat" tone="fat" />
+        </section>
+      </> : <div className="empty-state"><strong>No meals logged for this day.</strong>Use the Log a meal card to add one.</div>}
+      {error && <p className="error-text" aria-live="polite">{error}</p>}
+      <p className="meal-details-hint">Use the trash button to delete a meal</p>
+    </div>
+  </div>;
 }

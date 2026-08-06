@@ -63,6 +63,17 @@ export const mealParseSchema = z.object({
 
 export const rawTextSchema = z.string().trim().min(1, "Write a little more so it can be parsed.").max(2000);
 export const mealConfirmSchema = mealParseSchema.extend({ rawInput: rawTextSchema, mealDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/) });
+export const exerciseGuidanceSchema = z.object({
+  steps: z.array(z.string().trim().min(1).max(600)).length(4),
+  tip: z.string().trim().min(1).max(600),
+});
+export const exerciseAnswerSchema = z.object({
+  answer: z.string().trim().min(1).max(2000),
+});
+export const exerciseQuestionInputSchema = z.object({
+  exerciseId: z.string().uuid(),
+  question: rawTextSchema,
+});
 export const bodyMetricSchema = z.object({
   metricDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
   weight: finiteNumber.min(20).max(500),
@@ -89,3 +100,5 @@ export const exerciseSchema = z.object({
 
 export type WorkoutParse = z.infer<typeof workoutParseSchema>;
 export type MealParse = z.infer<typeof mealParseSchema>;
+export type ExerciseGuidance = z.infer<typeof exerciseGuidanceSchema>;
+export type ExerciseAnswer = z.infer<typeof exerciseAnswerSchema>;

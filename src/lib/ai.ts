@@ -1,6 +1,7 @@
 import "server-only";
-import { mealParseSchema, rawTextSchema, workoutParseSchema, type MealParse, type WorkoutParse } from "./validation";
+import { exerciseAnswerSchema, exerciseGuidanceSchema, mealParseSchema, rawTextSchema, workoutParseSchema, type ExerciseAnswer, type ExerciseGuidance, type MealParse, type WorkoutParse } from "./validation";
 import { MUSCLES } from "./muscles";
+import type { Exercise } from "@/db/schema";
 
 export class AiError extends Error {
   constructor(message: string) {
@@ -63,5 +64,26 @@ export async function parseMeal(rawText: string): Promise<MealParse> {
   );
   const parsed = mealParseSchema.safeParse(result);
   if (!parsed.success) throw new AiError("The meal result was missing a field. Edit the text or retry.");
+  return parsed.data;
+}
+
+export async function generateExerciseGuidance(exercise: Exercise): Promise<ExerciseGuidance> {
+  const result = await askOpenRouter(
+    "You are a practical strength-training coach. Given one exercise, return exactly {\"steps\":[\"step1\",\"step2\",\"step3\",\"step4\"],\"tip\":\"...\"}. Steps must be exactly four concise (short), actionable, non-empty sentences covering setup and safe execution. The tip must be one concise, practical form tip. Use plain, encouraging language. This is general fitness guidance, not medical advice.",
+    `Exercise: ${exercise.name}\nPrimary target muscle: ${exercise.primaryMuscle}\nSecondary muscles: ${exercise.secondaryMuscles.length ? exercise.secondaryMuscles.join(", ") : "none"}`,
+  );
+  const parsed = exerciseGuidanceSchema.safeParse(result);
+  if (!parsed.success) throw new AiError("The guidance result was missing a field. Try again.");
+  return parsed.data;
+}
+
+export async function askExerciseQuestion(exercise: Exercise, question: string): Promise<ExerciseAnswer> {
+  const text = rawTextSchema.parse(question);
+  const result = await askOpenRouter(
+    "You are a practical strength-training coach. Given an exercise and a short question, return exactly {\"answer\":\"...\"} with one concise, non-empty answer. Be practical, safe, and encouraging. This is general fitness guidance, not medical advice; do not give personalized medical or injury advice.",
+    `Exercise: ${exercise.name}\nPrimary target muscle: ${exercise.primaryMuscle}\nSecondary muscles: ${exercise.secondaryMuscles.length ? exercise.secondaryMuscles.join(", ") : "none"}\n\nQuestion: ${text}`,
+  );
+  const parsed = exerciseAnswerSchema.safeParse(result);
+  if (!parsed.success) throw new AiError("The answer was missing a field. Try again.");
   return parsed.data;
 }
