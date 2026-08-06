@@ -35,6 +35,7 @@ The claim is **confirmed**. The project is several majors behind on most of its 
 ## Decisions
 
 - **TypeScript**: upgrade to 6.0.3 (last JS-based compiler, flags all TS 7 deprecations). Defer TS 7 native compiler (Corsa/tsgo) until ~7.1 when `typescript-eslint`/tooling matures.
+- **ESLint 10 — DEVIATION (implemented 2026-08-06)**: ESLint stayed on **9.39.5**, not 10.8.0. `eslint-config-next@16.3.0` (latest) bundles `eslint-plugin-react@^7.37.0`; its latest release (7.37.5, Apr 2025) crashes at runtime under ESLint 10 (`contextOrFilename.getFilename is not a function`). This is confirmed upstream: vercel/next.js#89764 and jsx-eslint/eslint-plugin-react#3977, still open. Plugin maintainer's guidance: "explicitly not yet compatible with eslint 10... Stick with v9 for now." Revisit ESLint 10 when eslint-plugin-react ships a compatible release; the flat-config rewrite in this migration is already ESLint-10-ready.
 - **Everything else migrates to latest** (as listed above).
 - **Node**: keep local Node 25.1.0. Next 16 requires Node >=20.9; ESLint 10 requires ^20.19 || ^22.13 || >=24 — all satisfied.
 - `@types/node`: pin to the major matching the deployed runtime. Default to `^25` (local runtime). If the Vercel project runs Node 24 LTS, use `^24` instead; adjust in Stage 6 after checking the platform.

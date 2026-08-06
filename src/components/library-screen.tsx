@@ -26,6 +26,8 @@ import {
   saveProfile,
 } from "@/lib/actions/library";
 import { getLibraryData } from "@/lib/queries/library";
+import { normalizeMuscle } from "@/lib/muscles";
+import { MuscleSelect } from "@/components/muscle-select";
 import { activityLevels, calculateBmr, calculateCalorieTargets, calculateTdee, kgFromUnit, valueInUnit, type ActivityLevel, type CalorieGoal } from "@/lib/metrics";
 
 type LibraryData = Awaited<ReturnType<typeof getLibraryData>>;
@@ -50,6 +52,7 @@ export function LibraryScreen({ data }: { data: LibraryData }) {
   const [activityLevel, setActivityLevel] = useState<ActivityLevel | "">(data.profile?.activityLevel ?? "");
   const [calorieGoal, setCalorieGoal] = useState<CalorieGoal | "">(data.profile?.calorieGoal ?? "");
   const [exerciseSearch, setExerciseSearch] = useState("");
+  const [editingExercise, setEditingExercise] = useState<LibraryData["exercises"][number] | null>(null);
 
   const selectedTemplate = data.templates.find((template) => template.id === selectedTemplateId) ?? data.templates[0];
   const activeExerciseCount = data.exercises.filter((exercise) => !exercise.archived).length;
@@ -83,16 +86,7 @@ export function LibraryScreen({ data }: { data: LibraryData }) {
   }
 
   function editLibraryExercise(exercise: LibraryData["exercises"][number]) {
-    const name = window.prompt("Exercise name", exercise.name);
-    if (!name?.trim()) return;
-    const primaryMuscle = window.prompt("Primary muscle", exercise.primaryMuscle);
-    if (!primaryMuscle?.trim()) return;
-    const defaultUnit = window.prompt("Default unit (kg or lb)", exercise.defaultUnit)?.toLowerCase();
-    if (defaultUnit !== "kg" && defaultUnit !== "lb") {
-      window.alert("Default unit must be kg or lb.");
-      return;
-    }
-    run(() => editExercise(exercise.id, { name, primaryMuscle, secondaryMuscles: exercise.secondaryMuscles, defaultUnit }));
+    setEditingExercise(exercise);
   }
 
   function saveCalorieNeeds() {
@@ -278,7 +272,7 @@ export function LibraryScreen({ data }: { data: LibraryData }) {
               <h3>Add to the library</h3>
               <p>It will be ready to use in any routine.</p>
               <label className="form-group"><span className="form-label">Name</span><input className="field" value={exerciseName} onChange={(event) => setExerciseName(event.target.value)} placeholder="Cable row" /></label>
-              <label className="form-group"><span className="form-label">Primary focus</span><input className="field" value={muscle} onChange={(event) => setMuscle(event.target.value)} placeholder="Back" /></label>
+              <label className="form-group"><span className="form-label">Target muscle</span><MuscleSelect value={muscle} onChange={setMuscle} placeholder="Choose target muscle..." /></label>
               <label className="form-group"><span className="form-label">Default unit</span><select className="select-field" value={exerciseUnit} onChange={(event) => setExerciseUnit(event.target.value as "kg" | "lb")}><option value="kg">Kilograms</option><option value="lb">Pounds</option></select></label>
               <button className="button" disabled={pending || !exerciseName.trim() || !muscle.trim()}><Plus size={14} /> Add movement</button>
             </form>
@@ -326,6 +320,40 @@ export function LibraryScreen({ data }: { data: LibraryData }) {
           </form>
         </section>
       )}
+
+      {editingExercise && <EditExerciseSheet
+        exercise={editingExercise}
+        onSave={(input) => run(() => editExercise(editingExercise.id, input))}
+        onClose={() => setEditingExercise(null)}
+      />}
     </>
+  );
+}
+
+function EditExerciseSheet({ exercise, onSave, onClose }: {
+  exercise: LibraryData["exercises"][number];
+  onSave: (input: { name: string; primaryMuscle: string; secondaryMuscles: string[]; defaultUnit: "kg" | "lb" }) => void;
+  onClose: () => void;
+}) {
+  const [name, setName] = useState(exercise.name);
+  const [primaryMuscle, setPrimaryMuscle] = useState(() => normalizeMuscle(exercise.primaryMuscle) ?? exercise.primaryMuscle);
+  const [defaultUnit, setDefaultUnit] = useState<"kg" | "lb">(exercise.defaultUnit);
+  const legacy = normalizeMuscle(exercise.primaryMuscle) === null;
+
+  return (
+    <div className="sheet-backdrop" role="dialog" aria-modal="true" aria-labelledby="edit-exercise-title">
+      <div className="sheet compact-sheet">
+        <div className="sheet-heading">
+          <div><h2 className="sheet-title" id="edit-exercise-title">Edit exercise</h2></div>
+          <button className="sheet-close" onClick={onClose} aria-label="Close"><X size={20} /></button>
+        </div>
+        <p className="sheet-intro">Changes apply to this movement everywhere it is used.</p>
+        <label className="form-group sheet-field"><span className="form-label">Exercise name</span><input className="field" value={name} onChange={(event) => setName(event.target.value)} /></label>
+        <label className="form-group sheet-field"><span className="form-label">Target muscle</span><MuscleSelect value={primaryMuscle} onChange={setPrimaryMuscle} /></label>
+        {legacy && <p className="status-text">{`The stored value "${exercise.primaryMuscle}" is not on the allowed list. Pick a target muscle to save.`}</p>}
+        <label className="form-group sheet-field"><span className="form-label">Default unit</span><select className="select-field" value={defaultUnit} onChange={(event) => setDefaultUnit(event.target.value as "kg" | "lb")}><option value="kg">Kilograms</option><option value="lb">Pounds</option></select></label>
+        <div className="sheet-actions"><button className="button ghost" onClick={onClose}>Cancel</button><button className="button" disabled={!name.trim() || normalizeMuscle(primaryMuscle) === null} onClick={() => onSave({ name, primaryMuscle, secondaryMuscles: exercise.secondaryMuscles, defaultUnit })}>Save changes</button></div>
+      </div>
+    </div>
   );
 }

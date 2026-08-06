@@ -1,6 +1,22 @@
 import { z } from "zod";
+import { MUSCLES, normalizeMuscle, type Muscle } from "@/lib/muscles";
 
 const finiteNumber = z.number().finite();
+
+export const muscleSchema = z
+  .string()
+  .trim()
+  .refine((value) => normalizeMuscle(value) !== null, {
+    message: `Target muscle must be one of: ${MUSCLES.join(", ")}`,
+  })
+  .transform((value) => normalizeMuscle(value) as Muscle);
+
+export const muscleInputSchema = z
+  .string()
+  .trim()
+  .min(1)
+  .max(60)
+  .transform((value) => normalizeMuscle(value) ?? value);
 
 export const unitSchema = z.enum(["kg", "lb"]);
 export const setInputSchema = z.object({
@@ -23,7 +39,7 @@ export const parserSetSchema = z.object({
 export const workoutParseSchema = z.object({
   exercises: z.array(z.object({
     name: z.string().trim().min(1).max(120),
-    primaryMuscle: z.string().trim().min(1).max(60),
+    primaryMuscle: muscleInputSchema,
     sets: z.array(parserSetSchema).min(1).max(30),
     notes: z.string().max(500).optional(),
   })).min(1).max(30),
@@ -66,8 +82,8 @@ export const profileSchema = z.object({
 export const templateSchema = z.object({ name: z.string().trim().min(1).max(80) });
 export const exerciseSchema = z.object({
   name: z.string().trim().min(1).max(100),
-  primaryMuscle: z.string().trim().min(1).max(60),
-  secondaryMuscles: z.array(z.string().trim().min(1).max(60)).max(8),
+  primaryMuscle: muscleSchema,
+  secondaryMuscles: z.array(muscleInputSchema).max(8),
   defaultUnit: unitSchema,
 });
 

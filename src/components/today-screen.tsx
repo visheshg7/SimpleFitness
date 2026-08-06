@@ -4,6 +4,7 @@ import { forwardRef, memo, useCallback, useEffect, useImperativeHandle, useRef, 
 import { ArrowRightLeft, Check, ChevronLeft, ChevronRight, ClipboardList, Dumbbell, Mic, Pencil, PersonStanding, Plus, RotateCcw, Trash2, UtensilsCrossed, X } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { DailyFuelCard } from "@/components/daily-fuel-card";
+import { MuscleSelect } from "@/components/muscle-select";
 import { saveBodyMetric } from "@/lib/actions/body";
 import { parseWorkoutText } from "@/lib/actions/ai";
 import { confirmMeal, parseMealText } from "@/lib/actions/meal";
@@ -226,7 +227,9 @@ const ExerciseRow = forwardRef<ExerciseRowHandle, { data: ExerciseData; unit: "k
   // Server data refreshes in the background after every save. Merge it into
   // local state instead of replacing it, so a set the user is still editing
   // is never reset to its last saved (often blank) values.
-  useEffect(() => {
+  const [prevServerSets, setPrevServerSets] = useState(data.sets);
+  if (prevServerSets !== data.sets) {
+    setPrevServerSets(data.sets);
     setSets((current) => {
       const serverSets = data.sets.map(toLocalSet);
       const merged = serverSets.map((serverSet) => {
@@ -240,7 +243,7 @@ const ExerciseRow = forwardRef<ExerciseRowHandle, { data: ExerciseData; unit: "k
       const unchanged = current.length === merged.length && current.every((set, index) => sameLocalSet(set, merged[index]));
       return unchanged ? current : merged;
     });
-  }, [data.sets, toLocalSet]);
+  }
 
   const toPayload = useCallback((set: LocalSet) => {
     const weight = set.weight === "" ? null : Number(set.weight);
@@ -684,7 +687,7 @@ function WorkoutCapture({ data }: { data: TodayData }) {
            <datalist id="exercise-library-options">{data.library.map((option) => <option value={option.name} key={option.id} />)}</datalist>
            {parsed.exercises.map((exercise, exerciseIndex) => <div className="review-exercise" key={exerciseIndex}>
              <label className="form-group"><span className="form-label">Exercise name</span><input className="field" list="exercise-library-options" value={exercise.name} onChange={(event) => setParsed({ ...parsed, exercises: parsed.exercises.map((item, index) => index === exerciseIndex ? { ...item, name: event.target.value } : item) })} /></label>
-             {!data.library.some((option) => option.name.toLowerCase() === exercise.name.toLowerCase()) && <label className="form-group sheet-field"><span className="form-label">Target muscle</span><input className="field" value={exercise.primaryMuscle} onChange={(event) => setParsed({ ...parsed, exercises: parsed.exercises.map((item, index) => index === exerciseIndex ? { ...item, primaryMuscle: event.target.value } : item) })} /></label>}
+             {!data.library.some((option) => option.name.toLowerCase() === exercise.name.toLowerCase()) && <label className="form-group sheet-field"><span className="form-label">Target muscle</span><MuscleSelect value={exercise.primaryMuscle} onChange={(value) => setParsed({ ...parsed, exercises: parsed.exercises.map((item, index) => index === exerciseIndex ? { ...item, primaryMuscle: value } : item) })} /></label>}
             {exercise.sets.map((set, setIndex) => <div className="review-row" key={setIndex}>
               <span className="set-number">{setIndex + 1}</span>
               <input className="field tiny-field" type="number" inputMode="decimal" aria-label={`Set ${setIndex + 1} weight`} placeholder="weight" value={set.weight ?? ""} onChange={(event) => setParsed({ ...parsed, exercises: parsed.exercises.map((item, index) => index === exerciseIndex ? { ...item, sets: item.sets.map((current, innerIndex) => innerIndex === setIndex ? { ...current, weight: event.target.value === "" ? null : Number(event.target.value) } : current) } : item) })} />
