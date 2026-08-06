@@ -1,7 +1,7 @@
 "use client";
 
 import { forwardRef, memo, useCallback, useEffect, useImperativeHandle, useRef, useState, useTransition } from "react";
-import { ArrowRightLeft, Check, ChevronLeft, ChevronRight, ClipboardList, Dumbbell, Mic, Pencil, PersonStanding, Plus, RotateCcw, Trash2, UtensilsCrossed, X } from "lucide-react";
+import { ArrowRightLeft, Check, ChevronLeft, ChevronRight, ClipboardList, Dumbbell, Mic, Pencil, PersonStanding, Plus, RotateCcw, Sparkle, Trash2, UtensilsCrossed, X } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { DailyFuelCard } from "@/components/daily-fuel-card";
 import { MuscleSelect } from "@/components/muscle-select";
@@ -118,8 +118,7 @@ export function TodayScreen({ data }: { data: TodayData }) {
 
     <section className="routine-section" aria-labelledby="routine-title">
       <div className="routine-heading">
-        <h2 className="routine-title" id="routine-title">Routine</h2>
-        <span className="routine-note">Choose your plan for today</span>
+        <h2 className="routine-title" id="routine-title">Select workout:</h2>
       </div>
       <div className="template-row" aria-label="Routine">
         {data.templates.map((template) => <button
@@ -668,9 +667,9 @@ function WorkoutCapture({ data }: { data: TodayData }) {
 
   return <section className={`capture-hero${parsed ? " capture-review" : ""}`} aria-labelledby="capture-title">
     <div className="capture-heading">
-      <span className="tile-icon"><ClipboardList size={19} /></span>
+      <span className="tile-icon"><Sparkle size={19} /></span>
       <div className="capture-copy">
-        <h2 className="capture-title" id="capture-title">Log a workout</h2>
+        <h2 className="capture-title" id="capture-title">Log workout with AI</h2>
         <p className="capture-subtitle">Describe your workout, AI will log it for you.</p>
       </div>
     </div>
