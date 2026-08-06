@@ -1,9 +1,11 @@
 "use client";
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { Check, ChevronRight, Dumbbell, Scale, Sparkles, Utensils, X } from "lucide-react";
 import { Bar, BarChart, CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { DailyFuelCard } from "@/components/daily-fuel-card";
+import { MuscleHeatmap } from "@/components/muscle-heatmap";
+import { buildMuscleHeatmap } from "@/lib/muscle-heatmap";
 import { getProgressData } from "@/lib/queries/progress";
 import { calorieGoalLabel, dateKey } from "@/lib/metrics";
 
@@ -17,7 +19,6 @@ const chartWarm = "var(--warm)";
 const chartMuted = "var(--text-muted)";
 const chartGrid = "var(--line)";
 const chartSurfaceStrong = "var(--surface-strong)";
-const muscleColors = ["var(--accent)", "var(--warm)", "var(--coral)", "var(--accent-deep)", "var(--success)", "var(--warm-deep)"];
 
 export function ProgressScreen({ data }: { data: ProgressData }) {
   const [metric, setMetric] = useState<Metric>("weight");
@@ -37,8 +38,10 @@ export function ProgressScreen({ data }: { data: ProgressData }) {
     const points = movement.points.filter((point) => isWithinDays(point.date, rangeDays));
     return { ...movement, points, currentWeightKg: points.at(-1)?.weightKg ?? 0, changeKg: points.length > 1 ? (points.at(-1)?.weightKg ?? 0) - points[0].weightKg : null };
   }).filter((movement) => movement.points.length);
-  const muscles = Object.entries(data.muscleTotals).sort(([, a], [, b]) => b - a);
-  const totalSets = muscles.reduce((total, [, count]) => total + count, 0);
+  const muscleHeatmap = useMemo(() => {
+    const totals = data.muscleSetCountsByDate.filter((row) => isWithinDays(row.date, rangeDays)).reduce<Record<string, number>>((acc, row) => { acc[row.muscle] = (acc[row.muscle] ?? 0) + row.count; return acc; }, {});
+    return buildMuscleHeatmap(totals);
+  }, [data, rangeDays]);
   const volumeChartData = buildVolumeChartData(volumeRows, range);
   const latestMovement = movementData[0];
   const insight = getInsight({ hasData: data.hasData, workoutCount: workoutDates.length, latestMovement, rangeVolume, volumeChange });
@@ -70,9 +73,9 @@ export function ProgressScreen({ data }: { data: ProgressData }) {
       <div className="activity-days">{data.week.map((day) => <div className="activity-day" key={day.date}><span className={`activity-dot${day.complete ? " complete" : ""}${day.today ? " today" : ""}`}>{day.complete ? <Check size={15} /> : day.label}</span><span>{new Date(`${day.date}T12:00:00`).toLocaleDateString("en-US", { weekday: "short" })}</span><small>{new Date(`${day.date}T12:00:00`).getDate()}</small></div>)}</div>
     </section>
 
-    <section className="progress-card balance-card">
-      <div className="progress-card-heading"><div><h2>Muscle focus</h2><p>Completed working sets across the last seven days.</p></div><span className="progress-card-meta">{totalSets ? `${totalSets} sets` : "No sets yet"}</span></div>
-      {muscles.length ? <><div className="focus-bar">{muscles.map(([muscle, count], index) => <span key={muscle} style={{ width: `${(count / totalSets) * 100}%`, background: muscleColors[index % muscleColors.length] }} title={`${muscle}: ${count} sets`} />)}</div><div className="focus-legend">{muscles.slice(0, 6).map(([muscle, count], index) => <div key={muscle}><span style={{ background: muscleColors[index % muscleColors.length] }} /><strong>{muscle}</strong><small>{Math.round((count / totalSets) * 100)}% · {count} sets</small></div>)}</div></> : <div className="progress-empty">Complete a set to start seeing where your training attention goes.</div>}
+    <section className="progress-card muscle-heatmap-card">
+      <div className="progress-card-heading"><div><h2>Muscle heatmap</h2><p>Completed primary-muscle sets across {rangeLabel(range)}.</p></div><span className="progress-card-meta">{muscleHeatmap.totalSets ? `${muscleHeatmap.totalSets} sets` : "No sets yet"}</span></div>
+      <MuscleHeatmap bodyGender={data.bodyGender} heatmap={muscleHeatmap} />
     </section>
 
     <section className="progress-card chart-card">
