@@ -274,9 +274,6 @@ export async function saveSet(input: unknown) {
     if (!exercise[0]) throw new Error("Exercise not found.");
     const reps = parsed.reps === 0 ? null : parsed.reps ?? null;
     await db.insert(setLogs).values({ sessionId: parsed.sessionId, exerciseId: parsed.exerciseId, setNumber: parsed.setNumber, weightKg: kgFromUnit(parsed.weight, parsed.unit), reps, completed: parsed.completed && reps !== null, updatedAt: new Date() }).onConflictDoUpdate({ target: [setLogs.sessionId, setLogs.exerciseId, setLogs.setNumber], set: { weightKg: kgFromUnit(parsed.weight, parsed.unit), reps, completed: parsed.completed && reps !== null, updatedAt: new Date() } });
-    revalidatePath("/today");
-    revalidatePath("/progress");
-    revalidatePath("/history");
     return { success: true as const };
   } catch (error) { return failure(error); }
 }
@@ -299,9 +296,6 @@ export async function saveSets(input: unknown) {
       target: [setLogs.sessionId, setLogs.exerciseId, setLogs.setNumber],
       set: { weightKg: sql`excluded.weight_kg`, reps: sql`excluded.reps`, completed: sql`excluded.completed`, updatedAt: new Date() },
     });
-    revalidatePath("/today");
-    revalidatePath("/progress");
-    revalidatePath("/history");
     return { success: true as const };
   } catch (error) { return failure(error); }
 }
@@ -322,9 +316,6 @@ export async function deleteSet(input: unknown) {
     for (const set of followingSets) {
       await db.update(setLogs).set({ setNumber: set.setNumber - 1, updatedAt: new Date() }).where(and(eq(setLogs.sessionId, parsed.sessionId), eq(setLogs.exerciseId, parsed.exerciseId), eq(setLogs.setNumber, set.setNumber)));
     }
-    revalidatePath("/today");
-    revalidatePath("/progress");
-    revalidatePath("/history");
     return { success: true as const };
   } catch (error) { return failure(error); }
 }
