@@ -27,8 +27,44 @@ type LocalSet = {
 type ActionResult = { success: boolean; error?: string };
 type ExerciseRowHandle = { flushDrafts: () => Promise<ActionResult> };
 
-function sameLocalSet(a: LocalSet, b: LocalSet) {
-  return a.id === b.id && a.setNumber === b.setNumber && a.weight === b.weight && a.reps === b.reps && a.completed === b.completed && a.saved === b.saved;
+const DRAFT_STORAGE_PREFIX = "simple-fitness-set-drafts:";
+
+function readDraftMap(sessionId: string): Record<string, LocalSet[]> {
+  try {
+    const raw = window.localStorage.getItem(`${DRAFT_STORAGE_PREFIX}${sessionId}`);
+    return raw ? JSON.parse(raw) as Record<string, LocalSet[]> : {};
+  } catch { return {}; }
+}
+
+function writeDraftMap(sessionId: string, exerciseId: string, sets: LocalSet[]) {
+  try {
+    const map = readDraftMap(sessionId);
+    if (sets.length) map[exerciseId] = sets;
+    else delete map[exerciseId];
+    window.localStorage.setItem(`${DRAFT_STORAGE_PREFIX}${sessionId}`, JSON.stringify(map));
+  } catch { /* storage unavailable */ }
+}
+
+function clearExerciseDrafts(sessionId: string, exerciseId: string) {
+  try {
+    const map = readDraftMap(sessionId);
+    delete map[exerciseId];
+    window.localStorage.setItem(`${DRAFT_STORAGE_PREFIX}${sessionId}`, JSON.stringify(map));
+  } catch { /* storage unavailable */ }
+}
+
+function clearSessionDrafts(sessionId: string) {
+  try { window.localStorage.removeItem(`${DRAFT_STORAGE_PREFIX}${sessionId}`); } catch { /* storage unavailable */ }
+}
+
+function sameServerSets(a: ExerciseData["sets"], b: ExerciseData["sets"]) {
+  if (a.length !== b.length) return false;
+  for (let index = 0; index < a.length; index += 1) {
+    const left = a[index];
+    const right = b[index];
+    if (left.id !== right.id || left.setNumber !== right.setNumber || left.weightKg !== right.weightKg || left.reps !== right.reps || left.completed !== right.completed) return false;
+  }
+  return true;
 }
 
 export function TodayScreen({ data }: { data: TodayData }) {
@@ -47,12 +83,37 @@ export function TodayScreen({ data }: { data: TodayData }) {
   const selectedTemplate = data.templates.find((template) => template.id === data.selectedTemplateId);
   const isStarted = Boolean(data.session?.startedAt);
   const isComplete = Boolean(data.session?.completedAt);
-  const completedSets = data.exercises.reduce((total, exercise) => total + exercise.sets.filter((set) => set.completed).length, 0);
-  const totalSets = data.exercises.reduce((total, exercise) => total + (exercise.sets.length || exercise.targetSets || 0), 0);
+  const [exerciseStats, setExerciseStats] = useState<Record<string, { completed: number; total: number }>>(() => {
+    const stats: Record<string, { completed: number; total: number }> = {};
+    for (const exercise of data.exercises) stats[exercise.id] = { completed: exercise.sets.filter((set) => set.completed).length, total: exercise.sets.length || exercise.targetSets || 0 };
+    return stats;
+  });
+  const completedSets = Object.values(exerciseStats).reduce((total, entry) => total + entry.completed, 0);
+  const totalSets = Object.values(exerciseStats).reduce((total, entry) => total + entry.total, 0);
+
+  const reportStats = useCallback((exerciseId: string, completed: number, total: number) => {
+    setExerciseStats((previous) => {
+      const current = previous[exerciseId];
+      if (current && current.completed === completed && current.total === total) return previous;
+      return { ...previous, [exerciseId]: { completed, total } };
+    });
+  }, []);
 
   useEffect(() => {
     selectedDayRef.current?.scrollIntoView({ block: "nearest", inline: "center" });
   }, [data.today]);
+
+  // When the exercise list changes (add, remove, swap, finish), drop stats
+  // for removed exercises and seed fresh ones for new rows.
+  const [prevExercises, setPrevExercises] = useState(data.exercises);
+  if (prevExercises !== data.exercises) {
+    setPrevExercises(data.exercises);
+    setExerciseStats((previous) => {
+      const next: Record<string, { completed: number; total: number }> = {};
+      for (const exercise of data.exercises) next[exercise.id] = previous[exercise.id] ?? { completed: exercise.sets.filter((set) => set.completed).length, total: exercise.sets.length || exercise.targetSets || 0 };
+      return next;
+    });
+  }
 
   function refreshAfter(action: () => Promise<ActionResult>) {
     setActionError("");
@@ -80,6 +141,7 @@ export function TodayScreen({ data }: { data: TodayData }) {
 
   function cancelWorkout() {
     if (!data.session || !window.confirm("Cancel this workout? Its logged sets will be discarded.")) return;
+    clearSessionDrafts(data.session.id);
     refreshAfter(() => cancelSession(data.session!.id));
   }
 
@@ -89,6 +151,13 @@ export function TodayScreen({ data }: { data: TodayData }) {
 
   function scrollDays(direction: number) {
     stripRef.current?.scrollBy({ left: direction * 240, behavior: "smooth" });
+  }
+
+  function switchDay(date: string) {
+    startTransition(async () => {
+      await Promise.all(Object.values(exerciseRefs.current).filter((ref): ref is ExerciseRowHandle => Boolean(ref)).map((ref) => ref.flushDrafts().catch(() => ({ success: false }))));
+      router.replace(date === data.currentDate ? "/today" : `/today?date=${date}`, { scroll: false });
+    });
   }
 
   return <>
@@ -108,7 +177,7 @@ export function TodayScreen({ data }: { data: TodayData }) {
           className={`day-dot${day.complete ? " complete" : ""}${day.today ? " today" : ""}${day.date === data.today ? " selected" : ""}`}
           key={day.date}
           ref={day.date === data.today ? selectedDayRef : undefined}
-          onClick={() => router.replace(day.date === data.currentDate ? "/today" : `/today?date=${day.date}`, { scroll: false })}
+          onClick={() => switchDay(day.date)}
         >
           {day.complete && <span className="day-dot-log" aria-hidden="true"><Check size={10} strokeWidth={3} /></span>}
           <span className="day-dot-label">{day.label}</span>
@@ -155,9 +224,10 @@ export function TodayScreen({ data }: { data: TodayData }) {
           key={exercise.sessionExerciseId ?? exercise.id}
           ref={(handle) => { exerciseRefs.current[exercise.id] = handle; }}
           onOpenDetails={() => setSelectedExercise(exercise)}
-          onRemove={!isComplete ? () => window.confirm(`Remove ${exercise.name} from this workout? Its logged sets will be deleted.`) && refreshAfter(() => removeExerciseFromSession({ sessionId: data.session!.id, exerciseId: exercise.id })) : undefined}
+          onRemove={!isComplete ? () => { if (!window.confirm(`Remove ${exercise.name} from this workout? Its logged sets will be deleted.`)) return; if (data.session) clearExerciseDrafts(data.session.id, exercise.id); refreshAfter(() => removeExerciseFromSession({ sessionId: data.session!.id, exerciseId: exercise.id })); } : undefined}
           onReset={() => refreshAfter(() => resetExerciseSets({ sessionId: data.session!.id, exerciseId: exercise.id }))}
           onSwap={!isComplete ? () => setSwapExercise(exercise) : undefined}
+          onStatsChange={reportStats}
           sessionId={data.session?.id}
           started
           unit={data.profile.preferredUnit}
@@ -202,7 +272,7 @@ export function TodayScreen({ data }: { data: TodayData }) {
   </>;
 }
 
-const ExerciseRow = forwardRef<ExerciseRowHandle, { data: ExerciseData; unit: "kg" | "lb"; sessionId?: string; started: boolean; onOpenDetails: () => void; onSwap?: () => void; onReset?: () => void; onRemove?: () => void }>(function ExerciseRow({ data, unit, sessionId, started, onOpenDetails, onSwap, onReset, onRemove }, ref) {
+const ExerciseRow = forwardRef<ExerciseRowHandle, { data: ExerciseData; unit: "kg" | "lb"; sessionId?: string; started: boolean; onOpenDetails: () => void; onSwap?: () => void; onReset?: () => void; onRemove?: () => void; onStatsChange: (exerciseId: string, completed: number, total: number) => void }>(function ExerciseRow({ data, unit, sessionId, started, onOpenDetails, onSwap, onReset, onRemove, onStatsChange }, ref) {
   const toLocalSet = useCallback((set: ExerciseData["sets"][number]): LocalSet => ({
     id: set.id,
     setNumber: set.setNumber,
@@ -215,38 +285,54 @@ const ExerciseRow = forwardRef<ExerciseRowHandle, { data: ExerciseData; unit: "k
   const [sets, setSets] = useState<LocalSet[]>(() => data.sets.map(toLocalSet));
   const [editingSets, setEditingSets] = useState<Set<number>>(() => new Set());
   const [error, setError] = useState("");
-  const [savingCount, setSavingCount] = useState(0);
   const setTrackRef = useRef<HTMLDivElement>(null);
   const setsRef = useRef<LocalSet[]>(sets);
   const editingSetsRef = useRef<Set<number>>(new Set());
-  const saveTimers = useRef(new Map<number, ReturnType<typeof setTimeout>>());
   const pendingSaves = useRef(new Map<number, string>());
 
   useEffect(() => { setsRef.current = sets; }, [sets]);
 
-  useEffect(() => () => {
-    saveTimers.current.forEach((timer) => clearTimeout(timer));
+  // Unsaved drafts survive page reloads. They are restored only after
+  // hydration so the server-rendered values never mismatch.
+  useEffect(() => {
+    if (!sessionId) return;
+    const drafts = readDraftMap(sessionId)[data.id] ?? [];
+    if (!drafts.length) return;
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- post-hydration restore cannot be derived during render
+    setSets((current) => {
+      const merged = current.map((set) => {
+        const draft = drafts.find((item) => item.setNumber === set.setNumber);
+        return draft ? { ...draft, saved: false } : set;
+      });
+      for (const draft of drafts) if (!merged.some((set) => set.setNumber === draft.setNumber)) merged.push({ ...draft, saved: false });
+      merged.sort((a, b) => a.setNumber - b.setNumber);
+      return merged;
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Server data refreshes in the background after every save. Merge it into
-  // local state instead of replacing it, so a set the user is still editing
-  // is never reset to its last saved (often blank) values.
+  useEffect(() => { editingSetsRef.current = editingSets; }, [editingSets]);
+
+  useEffect(() => {
+    if (!sessionId) return;
+    writeDraftMap(sessionId, data.id, sets.filter((set) => !set.saved));
+  }, [sessionId, data.id, sets]);
+
+  useEffect(() => {
+    onStatsChange(data.id, sets.filter((set) => set.completed).length, sets.length || data.targetSets || 0);
+  }, [sets, data.id, data.targetSets, onStatsChange]);
+
+  // Server refreshes arrive after session-level actions (finish, reset,
+  // swap, quick-log). When the server state for this exercise changed, the
+  // server wins and unsaved drafts are discarded; when it is unchanged,
+  // local state is kept untouched.
   const [prevServerSets, setPrevServerSets] = useState(data.sets);
   if (prevServerSets !== data.sets) {
     setPrevServerSets(data.sets);
-    setSets((current) => {
-      const serverSets = data.sets.map(toLocalSet);
-      const merged = serverSets.map((serverSet) => {
-        const local = current.find((set) => set.setNumber === serverSet.setNumber);
-        return local && !local.saved ? local : serverSet;
-      });
-      for (const local of current) {
-        if (!local.saved && !serverSets.some((serverSet) => serverSet.setNumber === local.setNumber)) merged.push(local);
-      }
-      merged.sort((a, b) => a.setNumber - b.setNumber);
-      const unchanged = current.length === merged.length && current.every((set, index) => sameLocalSet(set, merged[index]));
-      return unchanged ? current : merged;
-    });
+    if (!sameServerSets(prevServerSets, data.sets)) {
+      setSets(data.sets.map(toLocalSet));
+      setEditingSets(new Set<number>());
+    }
   }
 
   const toPayload = useCallback((set: LocalSet) => {
@@ -257,7 +343,7 @@ const ExerciseRow = forwardRef<ExerciseRowHandle, { data: ExerciseData; unit: "k
   }, [data.id, unit]);
 
   // A set is only marked saved when nothing was typed after the save that
-  // the server just acknowledged, so newer keystrokes always stay dirty.
+  // the server just acknowledged, so newer changes always stay dirty.
   const acknowledge = useCallback((setNumber: number, serialized: string) => {
     if (pendingSaves.current.get(setNumber) !== serialized) return;
     pendingSaves.current.delete(setNumber);
@@ -274,23 +360,15 @@ const ExerciseRow = forwardRef<ExerciseRowHandle, { data: ExerciseData; unit: "k
     setError("");
     const serialized = JSON.stringify(payload);
     pendingSaves.current.set(set.setNumber, serialized);
-    setSavingCount((count) => count + 1);
     const result = await saveSet({ sessionId, ...payload });
-    setSavingCount((count) => Math.max(0, count - 1));
-    if (result.success) acknowledge(set.setNumber, serialized);
-    else setError(result.error ?? "This set could not be saved.");
+    if (result.success) {
+      acknowledge(set.setNumber, serialized);
+    } else if (pendingSaves.current.get(set.setNumber) === serialized) {
+      pendingSaves.current.delete(set.setNumber);
+      setSets((current) => current.map((item) => (item.setNumber === set.setNumber && item.weight === set.weight && item.reps === set.reps ? { ...item, completed: set.completed ? false : item.completed, saved: false } : item)));
+      setError(result.error ?? "This set could not be saved.");
+    }
   }, [sessionId, toPayload, acknowledge]);
-
-  const scheduleSave = useCallback((setNumber: number) => {
-    if (!sessionId) return;
-    const existing = saveTimers.current.get(setNumber);
-    if (existing) clearTimeout(existing);
-    saveTimers.current.set(setNumber, setTimeout(() => {
-      saveTimers.current.delete(setNumber);
-      const draft = setsRef.current.find((set) => set.setNumber === setNumber);
-      if (draft && !draft.saved) void persistSet(draft);
-    }, 450));
-  }, [sessionId, persistSet]);
 
   const updateSet = useCallback((setNumber: number, patch: Partial<LocalSet>) => {
     const existing = setsRef.current.find((set) => set.setNumber === setNumber);
@@ -300,20 +378,16 @@ const ExerciseRow = forwardRef<ExerciseRowHandle, { data: ExerciseData; unit: "k
     setError("");
     pendingSaves.current.delete(setNumber);
     setSets((current) => current.map((set) => (set.setNumber === setNumber ? { ...next, saved: false } : set)));
-    scheduleSave(setNumber);
-  }, [scheduleSave]);
+  }, []);
 
   const editSet = useCallback((setNumber: number) => {
     editingSetsRef.current = new Set(editingSetsRef.current).add(setNumber);
     setEditingSets(editingSetsRef.current);
   }, []);
 
+  // Logging is optimistic: the set flips to completed immediately and the
+  // save happens in the background. Failures revert the flag.
   const logSet = useCallback((set: LocalSet) => {
-    const timer = saveTimers.current.get(set.setNumber);
-    if (timer) {
-      clearTimeout(timer);
-      saveTimers.current.delete(set.setNumber);
-    }
     const next = { ...set, completed: true, saved: false };
     const payload = toPayload(next);
     if (!payload || payload.reps === null) {
@@ -333,13 +407,9 @@ const ExerciseRow = forwardRef<ExerciseRowHandle, { data: ExerciseData; unit: "k
   const removeSet = useCallback((set: LocalSet) => {
     if (!sessionId) return;
     setError("");
-    saveTimers.current.forEach((timer) => clearTimeout(timer));
-    saveTimers.current.clear();
     pendingSaves.current.clear();
-    setSavingCount((count) => count + 1);
     void (async () => {
       const result = await deleteSet({ sessionId, exerciseId: data.id, setNumber: set.setNumber });
-      setSavingCount((count) => Math.max(0, count - 1));
       if (result.success) {
         const next = setsRef.current
           .filter((item) => item.setNumber !== set.setNumber)
@@ -353,28 +423,23 @@ const ExerciseRow = forwardRef<ExerciseRowHandle, { data: ExerciseData; unit: "k
         });
         editingSetsRef.current = nextEditing;
         setEditingSets(nextEditing);
-        for (const item of next) if (!item.saved) scheduleSave(item.setNumber);
       } else setError(result.error ?? "This set could not be deleted.");
     })();
-  }, [sessionId, data.id, scheduleSave]);
+  }, [sessionId, data.id]);
 
   useImperativeHandle(ref, () => ({
     async flushDrafts() {
       if (!sessionId) return { success: true };
-      saveTimers.current.forEach((timer) => clearTimeout(timer));
-      saveTimers.current.clear();
-      const drafts = setsRef.current;
-      const payloads = drafts.map(toPayload);
+      const payloads = setsRef.current.filter((set) => !set.saved).map(toPayload);
       if (payloads.some((payload) => payload === null)) {
         setError("Use valid numbers in every set, or delete the incomplete set before finishing.");
         return { success: false, error: "Use valid numbers in every set, or delete the incomplete set before finishing." };
       }
       const valid = payloads.filter((payload): payload is NonNullable<typeof payload> => payload !== null);
+      if (!valid.length) return { success: true };
       const sent = valid.map((payload) => ({ setNumber: payload.setNumber, serialized: JSON.stringify(payload) }));
       for (const { setNumber, serialized } of sent) pendingSaves.current.set(setNumber, serialized);
-      setSavingCount((count) => count + 1);
       const result = await saveSets({ sessionId, sets: valid });
-      setSavingCount((count) => Math.max(0, count - 1));
       if (result.success) for (const { setNumber, serialized } of sent) acknowledge(setNumber, serialized);
       else setError(result.error ?? "The set drafts could not be saved.");
       return result;
@@ -388,7 +453,6 @@ const ExerciseRow = forwardRef<ExerciseRowHandle, { data: ExerciseData; unit: "k
     requestAnimationFrame(() => setTrackRef.current?.lastElementChild?.scrollIntoView({ behavior: "smooth", block: "nearest" }));
   }
 
-  const saving = savingCount > 0;
   const previousBest = valueInUnit(data.personalBestWeightKg, unit);
   const currentBest = Math.max(...sets.filter((set) => set.completed).map((set) => Number(set.weight)).filter(Number.isFinite), 0);
   const prSetNumber = previousBest !== null && currentBest > previousBest
@@ -424,7 +488,6 @@ const ExerciseRow = forwardRef<ExerciseRowHandle, { data: ExerciseData; unit: "k
            onEdit={editSet}
            onLog={logSet}
            onPatch={updateSet}
-           saving={saving}
            set={set}
            unit={unit}
         />)}
@@ -435,10 +498,9 @@ const ExerciseRow = forwardRef<ExerciseRowHandle, { data: ExerciseData; unit: "k
    </div>;
 });
 
-const SetRow = memo(function SetRow({ set, unit, saving, isPr, isEditing, onPatch, onEdit, onLog, onDelete }: {
+const SetRow = memo(function SetRow({ set, unit, isPr, isEditing, onPatch, onEdit, onLog, onDelete }: {
   set: LocalSet;
   unit: "kg" | "lb";
-  saving: boolean;
   isPr: boolean;
   isEditing: boolean;
   onPatch: (setNumber: number, patch: Partial<LocalSet>) => void;
@@ -455,10 +517,10 @@ const SetRow = memo(function SetRow({ set, unit, saving, isPr, isEditing, onPatc
       <AdjustableNumber label="Reps" value={set.reps} step={1} inputMode="numeric" disabled={!editable} onChange={(value) => onPatch(set.setNumber, { reps: value })} />
     </div>
     <div className="set-row-actions">
-      {logged ? <button className="set-edit" type="button" onClick={() => onEdit(set.setNumber)}><Pencil size={13} /></button> : <button className="set-log" type="button" disabled={saving} onClick={() => onLog(set)}><Check size={15} /></button>}
+      {logged ? <button className="set-edit" type="button" onClick={() => onEdit(set.setNumber)}><Pencil size={13} /></button> : <button className="set-log" type="button" onClick={() => onLog(set)}><Check size={15} /></button>}
       <button className="set-delete" type="button" onClick={() => onDelete(set)} aria-label={`Delete set ${set.setNumber}`} title="Delete set"><Trash2 size={16} /></button>
     </div>
-    <span className={isPr ? "pr-note" : "save-state"} title={isPr ? "Heaviest completed set compared with previous sessions" : undefined}>{isPr ? "Weight PR" : !set.saved && saving ? "Saving" : !set.saved ? "Unsaved" : ""}</span>
+    <span className={isPr ? "pr-note" : "save-state"} title={isPr ? "Heaviest completed set compared with previous sessions" : undefined}>{isPr ? "Weight PR" : ""}</span>
   </div>;
 });
 
@@ -553,6 +615,7 @@ function SwapExerciseSheet({ data, exercise, onClose }: { data: TodayData; exerc
         exerciseId,
       });
       if (result.success) {
+        if (data.session) clearExerciseDrafts(data.session.id, exercise.id);
         router.refresh();
         onClose();
       } else setError(result.error ?? "This exercise could not be swapped.");
