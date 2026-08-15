@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef } from "react";
+import { useEffect, useMemo, useRef, useSyncExternalStore } from "react";
 import {
   BodyViewStyle,
   ColorInterpolation,
@@ -14,6 +14,7 @@ import {
 import type { MuscleHeatmap as MuscleHeatmapData } from "@/lib/muscle-heatmap";
 
 const NEUTRAL_FILL = "#2A2C31";
+const LIGHT_NEUTRAL_FILL = "#E9EEEA";
 const HEAD_FILL = "#37393F";
 const HAIR_FILL = "#1B1C20";
 const STROKE_COLOR = "#55585F";
@@ -32,6 +33,16 @@ const darkStyle = new BodyViewStyle({
 });
 
 const EMPTY_SELECTION: ReadonlySet<Muscle> = new Set();
+const THEME_EVENT = "simple-fitness-theme-change";
+
+function subscribeToTheme(onChange: () => void) {
+  window.addEventListener("storage", onChange);
+  window.addEventListener(THEME_EVENT, onChange);
+  return () => {
+    window.removeEventListener("storage", onChange);
+    window.removeEventListener(THEME_EVENT, onChange);
+  };
+}
 
 function heatColor(intensity: number): string {
   return toCss(heatScale.colorFor(intensity));
@@ -40,6 +51,9 @@ function heatColor(intensity: number): string {
 export function MuscleHeatmap({ bodyGender, heatmap }: { bodyGender: "male" | "female"; heatmap: MuscleHeatmapData }) {
   const frontRef = useRef<HTMLDivElement>(null);
   const backRef = useRef<HTMLDivElement>(null);
+
+  const theme = useSyncExternalStore(subscribeToTheme, () => document.documentElement.dataset.theme === "light" ? "light" : "dark", () => "dark");
+  const style = useMemo(() => theme === "light" ? darkStyle.copy({ defaultFillColor: LIGHT_NEUTRAL_FILL, headColor: LIGHT_NEUTRAL_FILL }) : darkStyle, [theme]);
 
   const highlights = useMemo(
     () =>
@@ -57,7 +71,7 @@ export function MuscleHeatmap({ bodyGender, heatmap }: { bodyGender: "male" | "f
 
     const gender: BodyGender = bodyGender;
     const buildMap = (side: "front" | "back") => {
-      const svg = buildBodySvg({ gender, side, highlights, style: darkStyle, selected: EMPTY_SELECTION, hideSubGroups: true });
+      const svg = buildBodySvg({ gender, side, highlights, style, selected: EMPTY_SELECTION, hideSubGroups: true });
       svg.style.width = "100%";
       svg.style.height = "auto";
       svg.setAttribute("aria-label", `${side === "front" ? "Front" : "Back"} body heatmap`);
@@ -71,7 +85,7 @@ export function MuscleHeatmap({ bodyGender, heatmap }: { bodyGender: "male" | "f
       front.replaceChildren();
       back.replaceChildren();
     };
-  }, [bodyGender, highlights]);
+  }, [bodyGender, highlights, style]);
 
   return (
     <div className="muscle-heatmap">
