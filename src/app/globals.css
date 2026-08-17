@@ -572,6 +572,20 @@ html[data-theme="light"] .date-filter-input { color-scheme: light; }
 .sheet-field { margin-top: 16px; }
 .parse-box { display: grid; grid-template-columns: minmax(0, 1fr) 42px; gap: 8px; }
 .parse-box textarea { min-height: 108px; resize: vertical; }
+.common-meals { margin-top: 13px; }
+.common-meals-label,
+.meal-suggestions-label { display: block; margin-bottom: 8px; color: var(--text-muted); font-size: 10px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; }
+.common-meals-chips { display: flex; flex-wrap: wrap; gap: 8px; }
+.common-meal-chip { display: inline-flex; align-items: baseline; gap: 7px; padding: 7px 12px; border: 1px solid var(--line); border-radius: 999px; background: var(--surface-strong); color: var(--ink); font-size: 12px; font-weight: 600; text-align: left; transition: border .16s ease, background .16s ease, transform .16s ease; }
+.common-meal-chip:hover { border-color: var(--line-strong); background: var(--surface); transform: translateY(-1px); }
+.common-meal-chip strong { color: var(--text-muted); font-size: 11px; font-weight: 700; white-space: nowrap; }
+.meal-suggestions-wrap { margin-top: 13px; }
+.meal-suggestions { display: grid; gap: 1px; overflow: hidden; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--line); }
+.meal-suggestions li { list-style: none; background: var(--surface-strong); }
+.meal-suggestions li:last-child { border-radius: 0 0 calc(var(--radius-sm) - 1px) calc(var(--radius-sm) - 1px); }
+.meal-suggestions button { width: 100%; display: flex; align-items: baseline; justify-content: space-between; gap: 12px; padding: 10px 12px; border: 0; background: transparent; color: var(--ink); font-size: 12px; text-align: left; cursor: pointer; }
+.meal-suggestions button:hover { background: var(--ink-07); }
+.meal-suggestions button strong { color: var(--text-muted); font-size: 11px; font-weight: 700; white-space: nowrap; }
 .capture-box { position: relative; display: block; }
 .capture-box .capture-field { padding-right: 46px; }
 .capture-mic { position: absolute; top: 7px; right: 8px; width: 38px; height: 38px; display: grid; place-items: center; padding: 0; border: 0; border-radius: 999px; background: transparent; color: var(--text-muted); transition: color .16s ease, background .16s ease; }

@@ -1,19 +1,21 @@
 import { and, asc, desc, eq, gte, isNotNull, lt } from "drizzle-orm";
 import { getDb } from "@/db";
 import { exercises, mealLogs, sessionExercises, setLogs, sessions, templateExercises, users, workoutTemplates } from "@/db/schema";
+import { getReusableMeals } from "@/lib/meal-cache";
 import { aggregateMacros, calculateStreak, dateKey, loggingWindow, nextTemplatePosition, weekCompletion } from "@/lib/metrics";
 
 export async function getTodayData(ownerId: string, today = dateKey(new Date())) {
   const db = getDb();
   const nextDate = new Date(`${today}T00:00:00`);
   nextDate.setDate(nextDate.getDate() + 1);
-  const [owner, templates, todaySession, completedSessions, library, meals] = await Promise.all([
+  const [owner, templates, todaySession, completedSessions, library, meals, reusableMeals] = await Promise.all([
     db.select().from(users).where(eq(users.id, ownerId)).limit(1),
     db.select().from(workoutTemplates).orderBy(asc(workoutTemplates.position)),
     db.select().from(sessions).where(and(eq(sessions.ownerId, ownerId), eq(sessions.sessionDate, today))).limit(1),
     db.select({ sessionDate: sessions.sessionDate, templateId: sessions.templateId }).from(sessions).where(and(eq(sessions.ownerId, ownerId), isNotNull(sessions.completedAt))).orderBy(desc(sessions.sessionDate)).limit(120),
     db.select().from(exercises).where(eq(exercises.archived, false)).orderBy(asc(exercises.name)),
     db.select().from(mealLogs).where(and(eq(mealLogs.ownerId, ownerId), gte(mealLogs.eatenAt, new Date(`${today}T00:00:00`)), lt(mealLogs.eatenAt, nextDate))).orderBy(asc(mealLogs.eatenAt)),
+    getReusableMeals(ownerId),
   ]);
   const profile = owner[0];
   if (!profile) throw new Error("Owner record was not found. Run the seed command first.");
@@ -114,6 +116,7 @@ export async function getTodayData(ownerId: string, today = dateKey(new Date()))
     exercises: exercisesForToday,
     dailyFuel,
     meals: mealRows,
+    reusableMeals,
     library,
     streak: calculateStreak(dates),
     week: weekCompletion(dates),
