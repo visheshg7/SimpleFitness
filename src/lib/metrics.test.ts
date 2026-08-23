@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { activityMultiplier, aggregateMacros, calculateBmi, calculateBmr, calculateCalorieTargets, calculateStreak, calculateTdee, calculateVolume, calorieGoalLabel, isDateInLoggingWindow, kgFromUnit, loggingWindow, nextTemplatePosition, valueInUnit, weekCompletion } from "./metrics";
+import { activityMultiplier, aggregateMacros, calculateBmi, calculateBmr, calculateCalorieTargets, calculateStreak, calculateTdee, calculateVolume, calorieGoalLabel, estimateOneRepMax, firstName, getFatTarget, getMacroTargets, getProteinTargets, isDateInLoggingWindow, kgFromUnit, loggingWindow, nextTemplatePosition, shortWorkoutName, valueInUnit, weekCompletion } from "./metrics";
 
 describe("canonical units", () => {
   it("converts pounds at the UI boundary", () => {
@@ -71,10 +71,53 @@ describe("training metrics", () => {
     expect(calculateVolume([{ weightKg: 50, reps: 8, completed: true }, { weightKg: 50, reps: null, completed: true }, { weightKg: 40, reps: 10, completed: false }])).toBe(400);
   });
 
+  it("estimates 1RM with the Epley formula", () => {
+    expect(estimateOneRepMax(80, 8)).toBeCloseTo(101.33, 1);
+    expect(estimateOneRepMax(100, 1)).toBe(100);
+    expect(estimateOneRepMax(0, 5)).toBeNull();
+    expect(estimateOneRepMax(60, 0)).toBeNull();
+  });
+
   it("aggregates daily macros and rotates templates", () => {
     expect(aggregateMacros([{ date: "2026-08-03", calories: 500, protein: 30, carbs: 50, fat: 10 }, { date: "2026-08-03", calories: 300, protein: 20, carbs: 20, fat: 5 }])["2026-08-03"]).toEqual({ date: "2026-08-03", calories: 800, protein: 50, carbs: 70, fat: 15 });
     expect(nextTemplatePosition([0, 1, 2], 1)).toBe(2);
     expect(nextTemplatePosition([0, 1, 2], 2)).toBe(0);
     expect(nextTemplatePosition([0, 1, 2], null)).toBe(0);
+  });
+
+  it("extracts first name with fallback", () => {
+    expect(firstName("Adam Smith")).toBe("Adam");
+    expect(firstName("  Alice   ")).toBe("Alice");
+    expect(firstName("")).toBe("there");
+    expect(firstName(null)).toBe("there");
+    expect(firstName("   ")).toBe("there");
+    expect(firstName(undefined)).toBe("there");
+    expect(firstName("Training journal")).toBe("there");
+    expect(firstName("Training")).toBe("there");
+    expect(firstName("  TRAINING JOURNAL ")).toBe("there");
+  });
+
+  it("derives a short workout name for hero display", () => {
+    expect(shortWorkoutName("Push")).toBe("Push");
+    expect(shortWorkoutName("Day 1 - Push (Chest Focus)")).toBe("Push");
+    expect(shortWorkoutName("Day 5 - Back Thickness (Back Priority)")).toBe("Back Thickness");
+    expect(shortWorkoutName("Day 2 - Pull (Back Width Focus)")).toBe("Pull");
+    expect(shortWorkoutName("Bench press (Chest)")).toBe("Bench press");
+    expect(shortWorkoutName("  ")).toBe("");
+    expect(shortWorkoutName("")).toBe("");
+    expect(shortWorkoutName("A - B - Legs (Foundation)")).toBe("Legs");
+  });
+
+  it("derives protein and fat gram targets from body weight", () => {
+    expect(getProteinTargets(70)).toEqual({ low: 126, high: 154 });
+    expect(getFatTarget(70)).toBe(35);
+    expect(getProteinTargets(72.5)).toEqual({ low: 130.5, high: 159.5 });
+    expect(getFatTarget(72.5)).toBe(36.3);
+    expect(getProteinTargets(null)).toBeNull();
+    expect(getFatTarget(null)).toBeNull();
+    expect(getProteinTargets(0)).toBeNull();
+    expect(getFatTarget(0)).toBeNull();
+    expect(getMacroTargets(70)).toEqual({ protein: { low: 126, high: 154 }, fat: 35 });
+    expect(getMacroTargets(null)).toEqual({ protein: null, fat: null });
   });
 });

@@ -1,7 +1,7 @@
 "use client";
 
 import { forwardRef, memo, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState, useTransition } from "react";
-import { ArrowRightLeft, Check, ChevronDown, ChevronLeft, ChevronRight, Dumbbell, Droplet, Flame, Link2, Mic, Pencil, PersonStanding, Plus, RotateCcw, Sparkle, Trash2, UtensilsCrossed, Wheat, X } from "lucide-react";
+import { ArrowRightLeft, Check, ChevronDown, ChevronRight, Dumbbell, Droplet, Flame, Link2, Mic, Pencil, PersonStanding, Plus, RotateCcw, Sparkle, Trash2, UtensilsCrossed, Wheat, X } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { DailyFuelCard } from "@/components/daily-fuel-card";
 import { MuscleSelect } from "@/components/muscle-select";
@@ -11,7 +11,7 @@ import { confirmMeal, deleteMeal, parseMealText } from "@/lib/actions/meal";
 import { addExerciseToSession, cancelSession, chooseTemplate, createExerciseAndLogQuickSets, deleteSet, finishSession, logQuickSets, removeExerciseFromSession, replaceSessionExercise, resetExerciseSets, saveSet, saveSets, startSession } from "@/lib/actions/session";
 import { getTodayData } from "@/lib/queries/today";
 import { matchReusableMeals, type ReusableMeal } from "@/lib/meal-text";
-import { calculateBmi, calorieGoalLabel, kgFromUnit, valueInUnit } from "@/lib/metrics";
+import { calculateBmi, calorieGoalLabel, firstName, kgFromUnit, shortWorkoutName, valueInUnit } from "@/lib/metrics";
 import type { ExerciseAnswer, ExerciseGuidance, MealParse, WorkoutParse } from "@/lib/validation";
 import { useSpeechInput } from "./speech-input";
 
@@ -76,14 +76,15 @@ export function TodayScreen({ data }: { data: TodayData }) {
   const [addExerciseOpen, setAddExerciseOpen] = useState(false);
   const [swapExercise, setSwapExercise] = useState<ExerciseData | null>(null);
   const [selectedExercise, setSelectedExercise] = useState<ExerciseData | null>(null);
+  const [workoutPickerOpen, setWorkoutPickerOpen] = useState(false);
   const [actionError, setActionError] = useState("");
   const [pending, startTransition] = useTransition();
   const selectedDayRef = useRef<HTMLButtonElement>(null);
-  const stripRef = useRef<HTMLDivElement>(null);
   const exerciseRefs = useRef<Record<string, ExerciseRowHandle | null>>({});
   const selectedTemplate = data.templates.find((template) => template.id === data.selectedTemplateId);
   const isStarted = Boolean(data.session?.startedAt);
   const isComplete = Boolean(data.session?.completedAt);
+  const locked = isStarted || isComplete;
   const [exerciseStats, setExerciseStats] = useState<Record<string, { completed: number; total: number }>>(() => {
     const stats: Record<string, { completed: number; total: number }> = {};
     for (const exercise of data.exercises) stats[exercise.id] = { completed: exercise.sets.filter((set) => set.completed).length, total: exercise.sets.length || exercise.targetSets || 0 };
@@ -147,12 +148,9 @@ export function TodayScreen({ data }: { data: TodayData }) {
   }
 
   const viewingToday = data.today === data.currentDate;
-  const hour = new Date().getHours();
-  const greeting = hour < 12 ? "Good morning!" : hour < 18 ? "Good afternoon!" : "Good evening!";
-
-  function scrollDays(direction: number) {
-    stripRef.current?.scrollBy({ left: direction * 240, behavior: "smooth" });
-  }
+  const personName = firstName(data.profile.displayName);
+  const shortName = selectedTemplate ? shortWorkoutName(selectedTemplate.name) || selectedTemplate.name : "Rest";
+  const longDateLabel = new Date(`${data.today}T12:00:00`).toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" });
 
   function switchDay(date: string) {
     startTransition(async () => {
@@ -164,14 +162,13 @@ export function TodayScreen({ data }: { data: TodayData }) {
   return <>
     <div className="page-intro today-intro">
       <div>
-        <p className="greeting-line" suppressHydrationWarning>{viewingToday ? greeting : "Daily log"}</p>
-        <h1 className="hero-line">{viewingToday ? "Let's get stronger today." : new Date(`${data.today}T12:00:00`).toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" })}</h1>
+        <h1 className="hero-line">Hi {personName}, it&apos;s <button type="button" className="hero-workout-picker" aria-label={`Change workout, currently ${selectedTemplate?.name ?? "Rest day"}`} aria-haspopup="dialog" aria-expanded={workoutPickerOpen} onClick={() => setWorkoutPickerOpen(true)}><span className="hero-workout-name">{shortName}</span><ChevronDown size={13} aria-hidden="true" className="hero-workout-chevron" /></button> day.</h1>
+        {!viewingToday && <p className="hero-date-subline">{longDateLabel}</p>}
       </div>
     </div>
 
     <div className="day-strip">
-      <button className="strip-chevron" onClick={() => scrollDays(-1)} aria-label="Scroll to earlier days"><ChevronLeft size={16} /></button>
-      <div className="streak-strip" role="group" aria-label="Select a logging day" ref={stripRef}>
+      <div className="streak-strip" role="group" aria-label="Select a logging day">
         {data.days.map((day) => <button
           aria-label={`${day.label}, ${day.dateLabel}${day.complete ? ", workout logged" : ""}${day.today ? ", today" : ""}`}
           aria-pressed={day.date === data.today}
@@ -185,25 +182,22 @@ export function TodayScreen({ data }: { data: TodayData }) {
           <span className="day-dot-date">{day.dateLabel}</span>
         </button>)}
       </div>
-      <button className="strip-chevron" onClick={() => scrollDays(1)} aria-label="Scroll to later days"><ChevronRight size={16} /></button>
     </div>
 
-    <section className="routine-section" aria-labelledby="routine-title">
-      <div className="routine-heading">
-        <h2 className="routine-title" id="routine-title">Select workout:</h2>
-      </div>
-      <div className="template-row" aria-label="Routine">
-        {data.templates.map((template) => <button
-          aria-pressed={template.id === data.selectedTemplateId}
-          className={`template-option${template.id === data.selectedTemplateId ? " active" : ""}`}
-          disabled={pending || isStarted || isComplete}
-          key={template.id}
-          onClick={() => refreshAfter(() => chooseTemplate({ templateId: template.id, sessionDate: data.today }))}
-        >{template.name}</button>)}
+    <section className="panel quick-actions-panel" aria-label="Quick actions">
+      <div className="quick-grid">
+        <button className="quick-card meal-card" onClick={() => setMealOpen(true)}>
+          <span className="tile-icon meal"><UtensilsCrossed size={18} /></span>
+          <span className="quick-copy"><h3>Log a meal</h3></span>
+          <span className="icon-button"><Plus size={17} /></span>
+        </button>
+        <button className="quick-card" onClick={() => setBodyOpen(true)}>
+          <span className="tile-icon body"><PersonStanding size={18} /></span>
+          <span className="quick-copy"><h3>Body check-in</h3></span>
+          <span className="icon-button"><Plus size={17} /></span>
+        </button>
       </div>
     </section>
-
-    <WorkoutCapture data={data} />
 
     <section className="workout-panel">
       <div className="panel-heading">
@@ -247,23 +241,11 @@ export function TodayScreen({ data }: { data: TodayData }) {
       </div>}
     </section>
 
-    <section className="panel">
-      <div className="quick-grid">
-        <button className="quick-card meal-card" onClick={() => setMealOpen(true)}>
-          <span className="tile-icon meal"><UtensilsCrossed size={18} /></span>
-          <span className="quick-copy"><h3>Log a meal</h3><p>AI-assisted macros estimation for quick logging.</p></span>
-          <span className="icon-button"><Plus size={17} /></span>
-        </button>
-        <button className="quick-card" onClick={() => setBodyOpen(true)}>
-          <span className="tile-icon body"><PersonStanding size={18} /></span>
-          <span className="quick-copy"><h3>Body check-in</h3><p>Weight required; height and body fat optional.</p></span>
-          <span className="icon-button"><Plus size={17} /></span>
-        </button>
-      </div>
-    </section>
+    <WorkoutCapture data={data} />
 
-    <DailyFuelCard data={data.dailyFuel} targetCalories={data.profile.dailyCalorieGoal} targetLabel={calorieGoalLabel(data.profile.calorieGoal)} subtitle="Confirmed meal estimates for this day." emptyMessage="No meals logged for this day yet. Add one to see your fuel totals." footer="Estimates are for direction, not precision." onLogMeal={() => setMealOpen(true)} onOpenDetails={() => setMealDetailsOpen(true)} />
+    <DailyFuelCard data={data.dailyFuel} latestWeightKg={data.latestWeightKg} targetCalories={data.profile.dailyCalorieGoal} targetLabel={calorieGoalLabel(data.profile.calorieGoal)} subtitle="Confirmed meal estimates for this day." emptyMessage="No meals logged for this day yet. Add one to see your fuel totals." footer="Estimates are for direction, not precision." onLogMeal={() => setMealOpen(true)} onOpenDetails={() => setMealDetailsOpen(true)} onBodyCheckIn={() => setBodyOpen(true)} />
 
+    {workoutPickerOpen && <WorkoutPickerSheet data={data} selectedTemplateId={data.selectedTemplateId} locked={locked} pending={pending} onClose={() => setWorkoutPickerOpen(false)} onSelect={(templateId) => refreshAfter(() => chooseTemplate({ templateId, sessionDate: data.today }))} />}
     {mealOpen && <MealSheet data={data} onClose={() => setMealOpen(false)} />}
     {mealDetailsOpen && <MealDetailsSheet data={data} onClose={() => setMealDetailsOpen(false)} />}
     {bodyOpen && <BodySheet data={data} onClose={() => setBodyOpen(false)} />}
@@ -524,6 +506,43 @@ const SetRow = memo(function SetRow({ set, unit, isPr, isEditing, onPatch, onEdi
     <span className={isPr ? "pr-note" : "save-state"} title={isPr ? "Heaviest completed set compared with previous sessions" : undefined}>{isPr ? "Weight PR" : ""}</span>
   </div>;
 });
+
+function WorkoutPickerSheet({ data, selectedTemplateId, locked, pending, onClose, onSelect }: { data: TodayData; selectedTemplateId: string | null; locked: boolean; pending: boolean; onClose: () => void; onSelect: (id: string) => void }) {
+  return <div className="sheet-backdrop centered-sheet-backdrop workout-picker-backdrop" role="dialog" aria-modal="true" aria-labelledby="workout-picker-title" onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
+    <div className="sheet centered-sheet workout-picker-sheet">
+      <div className="sheet-heading">
+        <div>
+          <div className="eyebrow">Workout</div>
+          <h2 className="sheet-title" id="workout-picker-title">Choose workout</h2>
+        </div>
+        <button className="sheet-close" onClick={onClose} aria-label="Close"><X size={20} /></button>
+      </div>
+      {locked && <p className="notice">Workout locked after start. Finish or cancel the current session to switch.</p>}
+      <div className="picker-list" role="listbox" aria-label="Workout templates">
+        {data.templates.map((template) => {
+          const active = template.id === selectedTemplateId;
+          const disabled = locked || pending;
+          return <button
+            key={template.id}
+            role="option"
+            aria-selected={active}
+            disabled={disabled}
+            className={`picker-row${active ? " active" : ""}${disabled ? " disabled" : ""}`}
+            onClick={() => { if (disabled) return; onSelect(template.id); onClose(); }}
+          >
+            <span className="picker-copy">
+              <strong>{template.name}</strong>
+              {active && <small>Current</small>}
+            </span>
+            {active ? <span className="picker-check" aria-hidden="true"><Check size={16} strokeWidth={2.5} /></span> : <span className="picker-chevron" aria-hidden="true"><ChevronRight size={16} /></span>}
+          </button>;
+        })}
+      </div>
+      {data.templates.length === 0 && <div className="empty-state"><strong>No templates yet.</strong>Create one in Library.</div>}
+      <div className="sheet-actions"><button className="button ghost" onClick={onClose}>Close</button></div>
+    </div>
+  </div>;
+}
 
 function PrestartExerciseRow({ data, index, onOpenDetails }: { data: ExerciseData; index: number; onOpenDetails: () => void }) {
   return <button className="exercise-plan-row" type="button" onClick={onOpenDetails}>

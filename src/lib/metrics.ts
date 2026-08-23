@@ -139,6 +139,13 @@ export function calculateVolume(sets: Array<{ weightKg: number | null; reps: num
   return sets.reduce((total, set) => total + (set.completed && set.weightKg && set.reps ? set.weightKg * set.reps : 0), 0);
 }
 
+export function estimateOneRepMax(weightKg: number, reps: number) {
+  if (!Number.isFinite(weightKg) || !Number.isFinite(reps) || weightKg <= 0 || reps <= 0) return null;
+  if (reps === 1) return Math.round(weightKg * 100) / 100;
+  const estimate = weightKg * (1 + reps / 30);
+  return Math.round(estimate * 100) / 100;
+}
+
 export function aggregateMacros(rows: Array<{ date: string; calories: number | null; protein: number | null; carbs: number | null; fat: number | null }>) {
   return rows.reduce<Record<string, { date: string; calories: number; protein: number; carbs: number; fat: number }>>((totals, row) => {
     const current = totals[row.date] ?? { date: row.date, calories: 0, protein: 0, carbs: 0, fat: 0 };
@@ -155,4 +162,40 @@ export function nextTemplatePosition(templatePositions: number[], lastPosition: 
   if (!templatePositions.length) return null;
   if (lastPosition === null || lastPosition === undefined) return templatePositions[0];
   return templatePositions.find((position) => position > lastPosition) ?? templatePositions[0];
+}
+
+export function firstName(displayName: string | null | undefined): string {
+  if (!displayName) return "there";
+  const trimmed = displayName.trim();
+  if (!trimmed) return "there";
+  const lower = trimmed.toLowerCase();
+  if (lower === "training journal" || lower === "training") return "there";
+  const token = trimmed.split(/\s+/)[0];
+  return token ? token : "there";
+}
+
+export function shortWorkoutName(templateName: string): string {
+  if (!templateName) return "";
+  const trimmed = templateName.trim();
+  if (!trimmed) return "";
+  const afterDash = trimmed.includes(" - ") ? trimmed.slice(trimmed.lastIndexOf(" - ") + 3) : trimmed;
+  return afterDash.replace(/\s*\(.*\)\s*$/, "").trim();
+}
+
+function round1(value: number): number {
+  return Math.round(value * 10) / 10;
+}
+
+export function getProteinTargets(weightKg: number | null | undefined): { low: number; high: number } | null {
+  if (weightKg === null || weightKg === undefined || !Number.isFinite(weightKg) || weightKg <= 0) return null;
+  return { low: round1(weightKg * 1.8), high: round1(weightKg * 2.2) };
+}
+
+export function getFatTarget(weightKg: number | null | undefined): number | null {
+  if (weightKg === null || weightKg === undefined || !Number.isFinite(weightKg) || weightKg <= 0) return null;
+  return round1(weightKg * 0.5);
+}
+
+export function getMacroTargets(weightKg: number | null | undefined): { protein: { low: number; high: number } | null; fat: number | null } {
+  return { protein: getProteinTargets(weightKg), fat: getFatTarget(weightKg) };
 }
