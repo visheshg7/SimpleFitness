@@ -1,17 +1,18 @@
-import { and, asc, eq, isNotNull } from "drizzle-orm";
+import { and, asc, eq, gte, isNotNull, sql } from "drizzle-orm";
 import { getDb } from "@/db";
 import { bodyMetrics, exercises, mealLogs, sessions, setLogs, trackedExercises, users } from "@/db/schema";
-import { aggregateMacros, calculateStreak, dateKey, estimateOneRepMax } from "@/lib/metrics";
+import { aggregateMacros, calculateStreak, dateKey, daysAgoKey, estimateOneRepMax } from "@/lib/metrics";
 import { normalizeMuscle } from "@/lib/muscles";
 
 export async function getProgressData(ownerId: string) {
   const db = getDb();
+  const since = daysAgoKey(365);
   const [profile, completed, workoutSets, meals, body, tracked] = await Promise.all([
     db.select({ calorieGoal: users.calorieGoal, dailyCalorieGoal: users.dailyCalorieGoal, sex: users.sex }).from(users).where(eq(users.id, ownerId)).limit(1),
-    db.select({ sessionDate: sessions.sessionDate }).from(sessions).where(and(eq(sessions.ownerId, ownerId), isNotNull(sessions.completedAt))).orderBy(asc(sessions.sessionDate)),
-    db.select({ set: setLogs, exercise: exercises, session: sessions }).from(setLogs).innerJoin(exercises, eq(setLogs.exerciseId, exercises.id)).innerJoin(sessions, eq(setLogs.sessionId, sessions.id)).where(and(eq(sessions.ownerId, ownerId), isNotNull(sessions.completedAt))),
-    db.select().from(mealLogs).where(eq(mealLogs.ownerId, ownerId)).orderBy(mealLogs.eatenAt),
-    db.select().from(bodyMetrics).where(eq(bodyMetrics.ownerId, ownerId)).orderBy(bodyMetrics.metricDate),
+    db.select({ sessionDate: sessions.sessionDate }).from(sessions).where(and(eq(sessions.ownerId, ownerId), gte(sessions.sessionDate, since), isNotNull(sessions.completedAt))).orderBy(asc(sessions.sessionDate)),
+    db.select({ set: setLogs, exercise: exercises, session: sessions }).from(setLogs).innerJoin(exercises, eq(setLogs.exerciseId, exercises.id)).innerJoin(sessions, eq(setLogs.sessionId, sessions.id)).where(and(eq(sessions.ownerId, ownerId), gte(sessions.sessionDate, since), isNotNull(sessions.completedAt))),
+    db.select().from(mealLogs).where(and(eq(mealLogs.ownerId, ownerId), gte(mealLogs.eatenAt, sql`${since}::date`))).orderBy(mealLogs.eatenAt),
+    db.select().from(bodyMetrics).where(and(eq(bodyMetrics.ownerId, ownerId), gte(bodyMetrics.metricDate, since))).orderBy(bodyMetrics.metricDate),
     db.select({ exerciseId: trackedExercises.exerciseId }).from(trackedExercises).where(eq(trackedExercises.ownerId, ownerId)).orderBy(asc(trackedExercises.position)),
   ]);
   const completedDates = completed.map((row) => row.sessionDate);

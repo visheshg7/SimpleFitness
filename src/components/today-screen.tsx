@@ -68,11 +68,13 @@ function sameServerSets(a: ExerciseData["sets"], b: ExerciseData["sets"]) {
   return true;
 }
 
-export function TodayScreen({ data }: { data: TodayData }) {
+type QuickAction = "meal" | "body" | "workout";
+
+export function TodayScreen({ data, initialAction }: { data: TodayData; initialAction?: QuickAction }) {
   const router = useRouter();
-  const [mealOpen, setMealOpen] = useState(false);
+  const [mealOpen, setMealOpen] = useState(initialAction === "meal");
   const [mealDetailsOpen, setMealDetailsOpen] = useState(false);
-  const [bodyOpen, setBodyOpen] = useState(false);
+  const [bodyOpen, setBodyOpen] = useState(initialAction === "body");
   const [addExerciseOpen, setAddExerciseOpen] = useState(false);
   const [swapExercise, setSwapExercise] = useState<ExerciseData | null>(null);
   const [selectedExercise, setSelectedExercise] = useState<ExerciseData | null>(null);
@@ -241,9 +243,9 @@ export function TodayScreen({ data }: { data: TodayData }) {
       </div>}
     </section>
 
-    <WorkoutCapture data={data} />
+    <WorkoutCapture data={data} initialFocus={initialAction === "workout"} />
 
-    <DailyFuelCard data={data.dailyFuel} latestWeightKg={data.latestWeightKg} targetCalories={data.profile.dailyCalorieGoal} targetLabel={calorieGoalLabel(data.profile.calorieGoal)} subtitle="Confirmed meal estimates for this day." emptyMessage="No meals logged for this day yet. Add one to see your fuel totals." footer="Estimates are for direction, not precision." onLogMeal={() => setMealOpen(true)} onOpenDetails={() => setMealDetailsOpen(true)} onBodyCheckIn={() => setBodyOpen(true)} />
+    <DailyFuelCard data={data.dailyFuel} latestWeightKg={data.latestWeightKg} targetCalories={data.profile.dailyCalorieGoal} targetLabel={calorieGoalLabel(data.profile.calorieGoal)} emptyMessage="No meals logged for this day yet. Add one to see your fuel totals." footer="Estimates are for direction, not precision." onLogMeal={() => setMealOpen(true)} onOpenDetails={() => setMealDetailsOpen(true)} onBodyCheckIn={() => setBodyOpen(true)} />
 
     {workoutPickerOpen && <WorkoutPickerSheet data={data} selectedTemplateId={data.selectedTemplateId} locked={locked} pending={pending} onClose={() => setWorkoutPickerOpen(false)} onSelect={(templateId) => refreshAfter(() => chooseTemplate({ templateId, sessionDate: data.today }))} />}
     {mealOpen && <MealSheet data={data} onClose={() => setMealOpen(false)} />}
@@ -677,7 +679,7 @@ function AddExerciseSheet({ data, onClose }: { data: TodayData; onClose: () => v
   </div>;
 }
 
-function WorkoutCapture({ data }: { data: TodayData }) {
+function WorkoutCapture({ data, initialFocus = false }: { data: TodayData; initialFocus?: boolean }) {
   const router = useRouter();
   const [text, setText] = useState("");
   const [parsed, setParsed] = useState<WorkoutParse | null>(null);
@@ -692,6 +694,10 @@ function WorkoutCapture({ data }: { data: TodayData }) {
     input.style.height = "52px";
     if (text.includes("\n")) input.style.height = `${Math.min(input.scrollHeight, 240)}px`;
   }, [text]);
+
+  useEffect(() => {
+    if (initialFocus) captureInputRef.current?.focus();
+  }, [initialFocus]);
 
   function parse() {
     setError("");
@@ -758,7 +764,6 @@ function WorkoutCapture({ data }: { data: TodayData }) {
       <span className="tile-icon"><Sparkle size={19} /></span>
       <div className="capture-copy">
         <h2 className="capture-title" id="capture-title">Log workout with AI</h2>
-        <p className="capture-subtitle">Describe your workout, AI will log it for you.</p>
       </div>
     </div>
     {!parsed ? <>

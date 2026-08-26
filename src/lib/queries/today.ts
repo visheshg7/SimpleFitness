@@ -1,25 +1,28 @@
-import { and, asc, desc, eq, gte, isNotNull, lt } from "drizzle-orm";
+import { cache } from "react";
+import { and, asc, desc, eq, gte, isNotNull, lt, sql } from "drizzle-orm";
 import { getDb } from "@/db";
 import { bodyMetrics, exercises, mealLogs, sessionExercises, setLogs, sessions, templateExercises, users, workoutTemplates } from "@/db/schema";
-import { getReusableMeals } from "@/lib/meal-cache";
-import { aggregateMacros, calculateStreak, dateKey, loggingWindow, nextTemplatePosition, weekCompletion } from "@/lib/metrics";
+import { normalizeMealText, type ReusableMeal } from "@/lib/meal-text";
+import { aggregateMacros, calculateStreak, dateKey, daysAgoKey, loggingWindow, nextTemplatePosition, weekCompletion } from "@/lib/metrics";
 
-export async function getTodayData(ownerId: string, today = dateKey(new Date())) {
+export const getTodayData = cache(async function getTodayData(ownerId: string, today = dateKey(new Date())) {
   const db = getDb();
   const nextDate = new Date(`${today}T00:00:00`);
   nextDate.setDate(nextDate.getDate() + 1);
-  const [owner, templates, todaySession, completedSessions, library, meals, reusableMeals, latestMetric] = await Promise.all([
+  const since = daysAgoKey(365);
+  const [owner, templates, todaySession, completedSessions, library, meals, recentReusableMeals, latestMetric] = await Promise.all([
     db.select().from(users).where(eq(users.id, ownerId)).limit(1),
     db.select().from(workoutTemplates).orderBy(asc(workoutTemplates.position)),
     db.select().from(sessions).where(and(eq(sessions.ownerId, ownerId), eq(sessions.sessionDate, today))).limit(1),
-    db.select({ sessionDate: sessions.sessionDate, templateId: sessions.templateId }).from(sessions).where(and(eq(sessions.ownerId, ownerId), isNotNull(sessions.completedAt))).orderBy(desc(sessions.sessionDate)).limit(120),
+    db.select({ sessionDate: sessions.sessionDate, templateId: sessions.templateId }).from(sessions).where(and(eq(sessions.ownerId, ownerId), isNotNull(sessions.completedAt))).orderBy(desc(sessions.sessionDate)).limit(400),
     db.select().from(exercises).where(eq(exercises.archived, false)).orderBy(asc(exercises.name)),
-    db.select().from(mealLogs).where(and(eq(mealLogs.ownerId, ownerId), gte(mealLogs.eatenAt, new Date(`${today}T00:00:00`)), lt(mealLogs.eatenAt, nextDate))).orderBy(asc(mealLogs.eatenAt)),
-    getReusableMeals(ownerId),
+    db.select().from(mealLogs).where(and(eq(mealLogs.ownerId, ownerId), gte(mealLogs.eatenAt, sql`${today}::date`), lt(mealLogs.eatenAt, nextDate))).orderBy(asc(mealLogs.eatenAt)),
+    db.select().from(mealLogs).where(eq(mealLogs.ownerId, ownerId)).orderBy(desc(mealLogs.eatenAt)).limit(100),
     db.select({ weightKg: bodyMetrics.weightKg }).from(bodyMetrics).where(eq(bodyMetrics.ownerId, ownerId)).orderBy(desc(bodyMetrics.metricDate)).limit(1),
   ]);
   const profile = owner[0];
   if (!profile) throw new Error("Owner record was not found. Run the seed command first.");
+  const reusableMeals = groupReusableMeals(recentReusableMeals);
 
   const lastTemplatePosition = templates.find((template) => template.id === completedSessions[0]?.templateId)?.position ?? null;
   const suggestedPosition = nextTemplatePosition(templates.map((template) => template.position), lastTemplatePosition);
@@ -37,7 +40,7 @@ export async function getTodayData(ownerId: string, today = dateKey(new Date()))
   const currentSets = activeSession
     ? await db.select().from(setLogs).where(eq(setLogs.sessionId, activeSession.id)).orderBy(asc(setLogs.exerciseId), asc(setLogs.setNumber))
     : [];
-  const previousSets = await db.select({ set: setLogs, session: sessions }).from(setLogs).innerJoin(sessions, eq(setLogs.sessionId, sessions.id)).where(and(eq(sessions.ownerId, ownerId), lt(sessions.sessionDate, today), isNotNull(sessions.completedAt), eq(setLogs.completed, true))).orderBy(desc(sessions.sessionDate), asc(setLogs.setNumber));
+  const previousSets = await db.select({ set: setLogs, session: sessions }).from(setLogs).innerJoin(sessions, eq(setLogs.sessionId, sessions.id)).where(and(eq(sessions.ownerId, ownerId), gte(sessions.sessionDate, since), lt(sessions.sessionDate, today), isNotNull(sessions.completedAt), eq(setLogs.completed, true))).orderBy(desc(sessions.sessionDate), asc(setLogs.setNumber));
 
   // Once a session starts, its own plan is the source of truth. This lets a
   // workout flex without rewriting the template used for later sessions.
@@ -124,4 +127,26 @@ export async function getTodayData(ownerId: string, today = dateKey(new Date()))
     week: weekCompletion(dates),
     days: loggingWindow(dates),
   };
+});
+
+function groupReusableMeals(recent: Array<typeof mealLogs.$inferSelect>) {
+  const grouped = new Map<string, ReusableMeal>();
+  for (const meal of recent) {
+    const key = normalizeMealText(meal.rawInput);
+    const existing = grouped.get(key);
+    if (!existing) {
+      grouped.set(key, {
+        rawInput: meal.rawInput,
+        parsedItems: meal.parsedItems,
+        calories: meal.calories,
+        protein: meal.protein,
+        carbs: meal.carbs,
+        fat: meal.fat,
+        count: 1,
+      });
+    } else {
+      existing.count += 1;
+    }
+  }
+  return [...grouped.values()].sort((a, b) => b.count - a.count);
 }

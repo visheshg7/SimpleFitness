@@ -5,12 +5,13 @@ import { TodayScreen } from "@/components/today-screen";
 
 export const dynamic = "force-dynamic";
 
-export default async function TodayPage({ searchParams }: { searchParams: Promise<{ date?: string | string[] }> }) {
+export default async function TodayPage({ searchParams }: { searchParams: Promise<{ action?: string | string[]; date?: string | string[] }> }) {
   const ownerId = await currentOwnerId();
   if (!ownerId) return null;
   const params = await searchParams;
   const requestedDate = typeof params.date === "string" ? params.date : undefined;
+  const initialAction = params.action === "meal" || params.action === "body" || params.action === "workout" ? params.action : undefined;
   const today = dateKey(new Date());
   const selectedDate = requestedDate && isDateInLoggingWindow(requestedDate) ? requestedDate : today;
-  return <TodayScreen data={await getTodayData(ownerId, selectedDate)} />;
+  return <TodayScreen data={await getTodayData(ownerId, selectedDate)} initialAction={initialAction} />;
 }

@@ -24,7 +24,7 @@ export function DailyFuelCard({
   latestWeightKg?: number | null;
   targetCalories?: number | null;
   targetLabel?: string | null;
-  subtitle: string;
+  subtitle?: string;
   emptyMessage: string;
   footer: string;
   onLogMeal?: () => void;
