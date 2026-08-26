@@ -932,7 +932,7 @@ function ExerciseDetailsSheet({ data, exercise, onClose }: { data: TodayData; ex
 
       <section className="ai-block" aria-labelledby="ai-guidance-title">
         <div className="ai-block-heading"><h3 className="ai-block-title" id="ai-guidance-title"><Sparkle size={15} /> How to do it</h3></div>
-        {guidanceLoading ? <p className="ai-loading" role="status"><span className="spinner" aria-hidden="true" /> Generating form guidance...</p>
+        {guidanceLoading ? <div className="ai-loading" role="status"><span className="visually-hidden">Generating form guidance</span><span className="ai-skeleton-row" aria-hidden="true" /><span className="ai-skeleton-row short" aria-hidden="true" /><span className="ai-skeleton-row" aria-hidden="true" /></div>
           : guidanceError ? <div className="ai-error"><p className="error-text">{guidanceError}</p><button className="button small" type="button" onClick={requestGuidance}>Try again</button></div>
           : guidance ? <><ol className="guidance-steps">{guidance.steps.map((step, index) => <li key={index}>{step}</li>)}</ol><p className="guidance-tip"><strong>Form tip:</strong> {guidance.tip}</p></>
           : null}

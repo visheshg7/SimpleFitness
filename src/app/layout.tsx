@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import { Outfit } from "next/font/google";
 import "./globals.css";
 
-const outfit = Outfit({ subsets: ["latin"], variable: "--font-outfit", weight: ["400", "500", "600", "700"] });
+const outfit = Outfit({ subsets: ["latin"], variable: "--font-outfit" });
 const themeScript = `try { if (localStorage.getItem("simple-fitness-theme") === "light") document.documentElement.dataset.theme = "light"; } catch {}`;
 
 export const metadata: Metadata = {
