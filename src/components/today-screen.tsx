@@ -5,6 +5,7 @@ import { ArrowRightLeft, Check, ChevronDown, ChevronRight, Dumbbell, Droplet, Fl
 import { useRouter } from "next/navigation";
 import { DailyFuelCard } from "@/components/daily-fuel-card";
 import { MuscleSelect } from "@/components/muscle-select";
+import { SetProgressRing } from "@/components/motion-primitives";
 import { saveBodyMetric } from "@/lib/actions/body";
 import { askExerciseQuestion, generateExerciseGuidance, parseWorkoutText } from "@/lib/actions/ai";
 import { confirmMeal, deleteMeal, parseMealText } from "@/lib/actions/meal";
@@ -210,7 +211,7 @@ export function TodayScreen({ data, initialAction }: { data: TodayData; initialA
             <p className="workout-subtitle">{selectedTemplate?.name ?? "Choose a routine to get started."}</p>
           </div>
         </div>
-        <div className="workout-progress"><strong>{completedSets}</strong> / {totalSets || "-"}<span>sets</span></div>
+        <SetProgressRing completed={completedSets} total={totalSets} />
       </div>
 
       {actionError && <p className="error-text panel-error" aria-live="polite">{actionError}</p>}
@@ -547,7 +548,7 @@ function WorkoutPickerSheet({ data, selectedTemplateId, locked, pending, onClose
 }
 
 function PrestartExerciseRow({ data, index, onOpenDetails }: { data: ExerciseData; index: number; onOpenDetails: () => void }) {
-  return <button className="exercise-plan-row" type="button" onClick={onOpenDetails}>
+  return <button className="exercise-plan-row" type="button" style={{ "--stagger-i": index } as React.CSSProperties} onClick={onOpenDetails}>
     <span className="exercise-plan-index">{String(index + 1).padStart(2, "0")}</span>
     <span className="exercise-plan-copy">
       <span className="exercise-name">{data.name}</span>

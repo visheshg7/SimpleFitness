@@ -1,5 +1,6 @@
 import { Utensils } from "lucide-react";
 import { getFatTarget, getProteinTargets } from "@/lib/metrics";
+import { CountUp } from "@/components/motion-primitives";
 
 export type DailyFuelData = {
   calories: number;
@@ -43,7 +44,7 @@ export function DailyFuelCard({
   const facts = data ? (
     <>
       <div className="macro-total">
-        <strong>{data.calories ? `${Math.round(data.calories).toLocaleString()}` : "—"}</strong>
+        <strong>{data.calories ? <CountUp value={data.calories} /> : "—"}</strong>
         <span>kcal</span>
       </div>
       {target !== null && <FuelGuide difference={difference} label={targetLabel} progress={progress} targetCalories={target} />}
@@ -212,7 +213,7 @@ function MacroRingCard({
       <div className="macro-ring-head">
         <strong>{label}</strong>
         <span className="macro-ring-value">
-          {Math.round(value)}
+          <CountUp value={value} format={(latest) => String(Math.round(latest))} />
           <small>g</small>
         </span>
       </div>
