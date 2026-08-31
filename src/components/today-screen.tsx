@@ -3,7 +3,8 @@
 import { forwardRef, memo, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState, useTransition } from "react";
 import { ArrowRightLeft, Check, ChevronDown, ChevronRight, Dumbbell, Droplet, Flame, Link2, Mic, Pencil, PersonStanding, Plus, RotateCcw, Sparkle, Trash2, UtensilsCrossed, Wheat, X } from "lucide-react";
 import { useRouter } from "next/navigation";
-import { DailyFuelCard } from "@/components/daily-fuel-card";
+import { DailyFuelCard, type DailyFuelData } from "@/components/daily-fuel-card";
+import { ConfirmDialog } from "@/components/confirm-dialog";
 import { MuscleSelect } from "@/components/muscle-select";
 import { SetProgressRing } from "@/components/motion-primitives";
 import { saveBodyMetric } from "@/lib/actions/body";
@@ -27,7 +28,28 @@ type LocalSet = {
   saved?: boolean;
 };
 type ActionResult = { success: boolean; error?: string };
-type ExerciseRowHandle = { flushDrafts: () => Promise<ActionResult> };
+type ExerciseRowHandle = { flushDrafts: () => Promise<ActionResult>; resetLocal: () => void };
+type OptimisticSession = { started: boolean; completed: boolean; canceled: boolean; removedExerciseIds: string[] };
+
+const EMPTY_OPTIMISTIC_SESSION: OptimisticSession = { started: false, completed: false, canceled: false, removedExerciseIds: [] };
+
+function optimisticExerciseData(item: TodayData["library"][number], targetSets: number | null, targetReps: number | null): ExerciseData {
+  return {
+    ...item,
+    sessionExerciseId: null,
+    targetSets: targetSets ?? 3,
+    targetReps: targetReps ?? 8,
+    sets: Array.from({ length: targetSets ?? 3 }, (_, index) => ({ id: `optimistic-${item.id}-${index + 1}`, sessionId: "", exerciseId: item.id, setNumber: index + 1, weightKg: null, reps: null, completed: false, createdAt: new Date(), updatedAt: new Date() })),
+    lastSession: [],
+    personalBestSet: null,
+    personalBestWeightKg: null,
+  };
+}
+
+function mergeFuel(base: TodayData["dailyFuel"], add: DailyFuelData, date: string): NonNullable<TodayData["dailyFuel"]> {
+  if (!base) return { date, ...add };
+  return { date: base.date, calories: base.calories + add.calories, protein: base.protein + add.protein, carbs: base.carbs + add.carbs, fat: base.fat + add.fat };
+}
 
 const DRAFT_STORAGE_PREFIX = "simple-fitness-set-drafts:";
 
@@ -82,19 +104,35 @@ export function TodayScreen({ data, initialAction }: { data: TodayData; initialA
   const [workoutPickerOpen, setWorkoutPickerOpen] = useState(false);
   const [actionError, setActionError] = useState("");
   const [pending, startTransition] = useTransition();
+  const [optimisticSession, setOptimisticSession] = useState<OptimisticSession>(EMPTY_OPTIMISTIC_SESSION);
+  const [optimisticAdded, setOptimisticAdded] = useState<ExerciseData[]>([]);
+  const [optimisticTemplateId, setOptimisticTemplateId] = useState<string | null>(null);
+  const [optimisticFuel, setOptimisticFuel] = useState<DailyFuelData[]>([]);
+  const [optimisticWeightKg, setOptimisticWeightKg] = useState<number | null>(null);
+  const [removeTarget, setRemoveTarget] = useState<ExerciseData | null>(null);
+  const [cancelOpen, setCancelOpen] = useState(false);
   const selectedDayRef = useRef<HTMLButtonElement>(null);
   const exerciseRefs = useRef<Record<string, ExerciseRowHandle | null>>({});
-  const selectedTemplate = data.templates.find((template) => template.id === data.selectedTemplateId);
-  const isStarted = Boolean(data.session?.startedAt);
-  const isComplete = Boolean(data.session?.completedAt);
+  const selectedTemplateId = optimisticTemplateId ?? data.selectedTemplateId;
+  const selectedTemplate = data.templates.find((template) => template.id === selectedTemplateId);
+  // Session-level actions (start, finish, cancel, remove, add, swap) flip
+  // local state first so the UI responds instantly; the settle block below
+  // clears the override once the revalidated server data confirms it.
+  const session = optimisticSession.canceled ? null : data.session;
+  const isStarted = optimisticSession.started || Boolean(session?.startedAt);
+  const isComplete = optimisticSession.completed || Boolean(session?.completedAt);
   const locked = isStarted || isComplete;
+  const visibleExercises = [...data.exercises.filter((exercise) => !optimisticSession.removedExerciseIds.includes(exercise.id) && !optimisticAdded.some((added) => added.id === exercise.id)), ...optimisticAdded];
   const [exerciseStats, setExerciseStats] = useState<Record<string, { completed: number; total: number }>>(() => {
     const stats: Record<string, { completed: number; total: number }> = {};
     for (const exercise of data.exercises) stats[exercise.id] = { completed: exercise.sets.filter((set) => set.completed).length, total: exercise.sets.length || exercise.targetSets || 0 };
     return stats;
   });
-  const completedSets = Object.values(exerciseStats).reduce((total, entry) => total + entry.completed, 0);
-  const totalSets = Object.values(exerciseStats).reduce((total, entry) => total + entry.total, 0);
+  const statsFor = (exercise: ExerciseData) => exerciseStats[exercise.id] ?? { completed: exercise.sets.filter((set) => set.completed).length, total: exercise.sets.length || exercise.targetSets || 0 };
+  const completedSets = visibleExercises.reduce((total, exercise) => total + statsFor(exercise).completed, 0);
+  const totalSets = visibleExercises.reduce((total, exercise) => total + statsFor(exercise).total, 0);
+  let dailyFuel = data.dailyFuel;
+  for (const fuel of optimisticFuel) dailyFuel = mergeFuel(dailyFuel, fuel, data.today);
 
   const reportStats = useCallback((exerciseId: string, completed: number, total: number) => {
     setExerciseStats((previous) => {
@@ -120,34 +158,133 @@ export function TodayScreen({ data, initialAction }: { data: TodayData; initialA
     });
   }
 
-  function refreshAfter(action: () => Promise<ActionResult>) {
+  // Optimistic overrides clear once the revalidated server data confirms
+  // them, so an exercise re-added later is never wrongly hidden.
+  const [prevData, setPrevData] = useState(data);
+  if (prevData !== data) {
+    setPrevData(data);
+    setOptimisticSession((current) => {
+      if (current === EMPTY_OPTIMISTIC_SESSION) return current;
+      const started = !current.started || Boolean(data.session?.startedAt);
+      const completed = !current.completed || Boolean(data.session?.completedAt);
+      const canceled = !current.canceled || !data.session;
+      const removed = current.removedExerciseIds.every((id) => !data.exercises.some((exercise) => exercise.id === id));
+      return started && completed && canceled && removed ? EMPTY_OPTIMISTIC_SESSION : current;
+    });
+    setOptimisticTemplateId(null);
+    setOptimisticFuel([]);
+    setOptimisticWeightKg(null);
+  }
+
+  function refreshAfter(action: () => Promise<ActionResult>, rollback?: () => void) {
     setActionError("");
     startTransition(async () => {
       const result = await action();
-      if (result.success) router.refresh();
-      else setActionError(result.error ?? "That change could not be saved.");
+      if (result.success) return;
+      rollback?.();
+      setActionError(result.error ?? "That change could not be saved.");
     });
   }
 
-  function finishWorkout() {
+  function startWorkout() {
+    if (!selectedTemplateId) return;
     setActionError("");
+    setOptimisticSession((current) => ({ ...current, started: true }));
+    refreshAfter(
+      () => startSession({ templateId: selectedTemplateId, sessionDate: data.today }),
+      () => setOptimisticSession((current) => ({ ...current, started: false })),
+    );
+  }
+
+  function removeExercise(exercise: ExerciseData) {
+    if (!session || isComplete) return;
+    clearExerciseDrafts(session.id, exercise.id);
+    setOptimisticSession((current) => ({ ...current, removedExerciseIds: [...current.removedExerciseIds, exercise.id] }));
+    refreshAfter(
+      () => removeExerciseFromSession({ sessionId: session.id, exerciseId: exercise.id }),
+      () => setOptimisticSession((current) => ({ ...current, removedExerciseIds: current.removedExerciseIds.filter((id) => id !== exercise.id) })),
+    );
+  }
+
+  function addExercise(exerciseId: string) {
+    const item = data.library.find((option) => option.id === exerciseId);
+    if (!item || !session) return;
+    const optimistic = optimisticExerciseData(item, 3, 8);
+    setOptimisticAdded((current) => [...current, optimistic]);
+    refreshAfter(
+      () => addExerciseToSession({ sessionId: session.id, exerciseId }),
+      () => setOptimisticAdded((current) => current.filter((exercise) => exercise.id !== optimistic.id)),
+    );
+  }
+
+  function replaceExercise(exercise: ExerciseData, replacementId: string) {
+    const replacement = data.library.find((option) => option.id === replacementId);
+    if (!replacement || !session) return;
+    clearExerciseDrafts(session.id, exercise.id);
+    const optimistic = optimisticExerciseData(replacement, exercise.targetSets, exercise.targetReps);
+    setOptimisticSession((current) => ({ ...current, removedExerciseIds: [...current.removedExerciseIds, exercise.id] }));
+    setOptimisticAdded((current) => [...current, optimistic]);
+    refreshAfter(
+      () => replaceSessionExercise({ sessionExerciseId: exercise.sessionExerciseId ?? undefined, sessionId: session.id, oldExerciseId: exercise.id, exerciseId: replacementId }),
+      () => {
+        setOptimisticSession((current) => ({ ...current, removedExerciseIds: current.removedExerciseIds.filter((id) => id !== exercise.id) }));
+        setOptimisticAdded((current) => current.filter((row) => row.id !== optimistic.id));
+      },
+    );
+  }
+
+  function resetExercise(exercise: ExerciseData) {
+    if (!session) return;
+    exerciseRefs.current[exercise.id]?.resetLocal();
+    refreshAfter(() => resetExerciseSets({ sessionId: session.id, exerciseId: exercise.id }));
+  }
+
+  function chooseWorkoutTemplate(templateId: string) {
+    setOptimisticTemplateId(templateId);
+    refreshAfter(
+      () => chooseTemplate({ templateId, sessionDate: data.today }),
+      () => setOptimisticTemplateId(null),
+    );
+  }
+
+  function fuelSaved(fuel: DailyFuelData) {
+    setOptimisticFuel((current) => [...current, fuel]);
+    return () => setOptimisticFuel((current) => current.filter((entry) => entry !== fuel));
+  }
+
+  function weightSaved(weightKg: number) {
+    setOptimisticWeightKg(weightKg);
+    return () => setOptimisticWeightKg(null);
+  }
+
+  function finishWorkout() {
+    if (!session) return;
+    setActionError("");
+    setOptimisticSession((current) => ({ ...current, completed: true }));
     startTransition(async () => {
       const draftResults = await Promise.all(Object.values(exerciseRefs.current).filter((ref): ref is ExerciseRowHandle => Boolean(ref)).map((ref) => ref.flushDrafts()));
       const draftError = draftResults.find((result) => !result.success);
       if (draftError) {
+        setOptimisticSession((current) => ({ ...current, completed: false }));
         setActionError(draftError.error ?? "The set drafts could not be saved.");
         return;
       }
-      const result = await finishSession(data.session!.id);
-      if (result.success) router.refresh();
-      else setActionError(result.error ?? "The workout could not be completed.");
+      const result = await finishSession(session.id);
+      if (!result.success) {
+        setOptimisticSession((current) => ({ ...current, completed: false }));
+        setActionError(result.error ?? "The workout could not be completed.");
+      }
     });
   }
 
   function cancelWorkout() {
-    if (!data.session || !window.confirm("Cancel this workout? Its logged sets will be discarded.")) return;
-    clearSessionDrafts(data.session.id);
-    refreshAfter(() => cancelSession(data.session!.id));
+    if (!session) return;
+    clearSessionDrafts(session.id);
+    setOptimisticSession((current) => ({ ...current, canceled: true }));
+    refreshAfter(
+      () => cancelSession(session.id),
+      () => setOptimisticSession((current) => ({ ...current, canceled: false })),
+    );
   }
 
   const viewingToday = data.today === data.currentDate;
@@ -216,45 +353,64 @@ export function TodayScreen({ data, initialAction }: { data: TodayData; initialA
 
       {actionError && <p className="error-text panel-error" aria-live="polite">{actionError}</p>}
 
-      {data.exercises.length ? isStarted ? <div className="exercise-list">
-        {data.exercises.map((exercise) => <ExerciseRow
+      {visibleExercises.length ? isStarted ? <div className="exercise-list">
+        {visibleExercises.map((exercise) => <ExerciseRow
           data={exercise}
           key={exercise.sessionExerciseId ?? exercise.id}
           ref={(handle) => { exerciseRefs.current[exercise.id] = handle; }}
           onOpenDetails={() => setSelectedExercise(exercise)}
-          onRemove={!isComplete ? () => { if (!window.confirm(`Remove ${exercise.name} from this workout? Its logged sets will be deleted.`)) return; if (data.session) clearExerciseDrafts(data.session.id, exercise.id); refreshAfter(() => removeExerciseFromSession({ sessionId: data.session!.id, exerciseId: exercise.id })); } : undefined}
-          onReset={() => refreshAfter(() => resetExerciseSets({ sessionId: data.session!.id, exerciseId: exercise.id }))}
+          onRemove={!isComplete && session ? () => setRemoveTarget(exercise) : undefined}
+          onReset={session ? () => resetExercise(exercise) : undefined}
           onSwap={!isComplete ? () => setSwapExercise(exercise) : undefined}
           onStatsChange={reportStats}
-          sessionId={data.session?.id}
+          sessionId={session?.id}
           started
           unit={data.profile.preferredUnit}
         />)}
       </div> : <div className="exercise-plan-list" aria-label="Planned exercises">
-        {data.exercises.map((exercise, index) => <PrestartExerciseRow data={exercise} index={index} key={exercise.sessionExerciseId ?? exercise.id} onOpenDetails={() => setSelectedExercise(exercise)} />)}
+        {visibleExercises.map((exercise, index) => <PrestartExerciseRow data={exercise} index={index} key={exercise.sessionExerciseId ?? exercise.id} onOpenDetails={() => setSelectedExercise(exercise)} />)}
       </div> : <div className="empty-state inverse-empty"><strong>No movements yet.</strong>Add exercises in Library or add them after starting.</div>}
 
       {isStarted && !isComplete && <button className="add-exercise" onClick={() => setAddExerciseOpen(true)}><Plus size={16} /> Add an exercise</button>}
 
       {isComplete || isStarted ? <div className="workout-footer">
         <span className="panel-kicker">{isComplete ? "Completed. Set log stays editable." : "Changes save automatically."}</span>
-         {isComplete ? <span className="session-complete"><Check size={15} /> Complete</span> : <div className="workout-footer-actions"><button className="button ghost cancel-workout" type="button" disabled={pending} onClick={cancelWorkout}>Cancel</button><button className="button citrus" type="button" disabled={pending} onClick={finishWorkout}>Finish workout</button></div>}
+         {isComplete ? <span className="session-complete"><Check size={15} /> Complete</span> : <div className="workout-footer-actions"><button className="button ghost cancel-workout" type="button" disabled={pending} onClick={() => setCancelOpen(true)}>Cancel</button><button className="button citrus" type="button" disabled={pending} onClick={finishWorkout}>Finish workout</button></div>}
       </div> : <div className="workout-footer prestart">
-        <button className="button citrus start-workout" disabled={pending || !selectedTemplate} onClick={() => refreshAfter(() => startSession({ templateId: data.selectedTemplateId!, sessionDate: data.today }))}><Dumbbell size={16} /> Start workout</button>
+        <button className="button citrus start-workout" disabled={pending || !selectedTemplate} onClick={startWorkout}><Dumbbell size={16} /> Start workout</button>
       </div>}
     </section>
 
     <WorkoutCapture data={data} initialFocus={initialAction === "workout"} />
 
-    <DailyFuelCard data={data.dailyFuel} latestWeightKg={data.latestWeightKg} targetCalories={data.profile.dailyCalorieGoal} targetLabel={calorieGoalLabel(data.profile.calorieGoal)} emptyMessage="No meals logged for this day yet. Add one to see your fuel totals." footer="Estimates are for direction, not precision." onLogMeal={() => setMealOpen(true)} onOpenDetails={() => setMealDetailsOpen(true)} onBodyCheckIn={() => setBodyOpen(true)} />
+    <DailyFuelCard data={dailyFuel} latestWeightKg={optimisticWeightKg ?? data.latestWeightKg} targetCalories={data.profile.dailyCalorieGoal} targetLabel={calorieGoalLabel(data.profile.calorieGoal)} emptyMessage="No meals logged for this day yet. Add one to see your fuel totals." footer="Estimates are for direction, not precision." onLogMeal={() => setMealOpen(true)} onOpenDetails={() => setMealDetailsOpen(true)} onBodyCheckIn={() => setBodyOpen(true)} />
 
-    {workoutPickerOpen && <WorkoutPickerSheet data={data} selectedTemplateId={data.selectedTemplateId} locked={locked} pending={pending} onClose={() => setWorkoutPickerOpen(false)} onSelect={(templateId) => refreshAfter(() => chooseTemplate({ templateId, sessionDate: data.today }))} />}
-    {mealOpen && <MealSheet data={data} onClose={() => setMealOpen(false)} />}
+    {workoutPickerOpen && <WorkoutPickerSheet data={data} selectedTemplateId={selectedTemplateId} locked={locked} pending={pending} onClose={() => setWorkoutPickerOpen(false)} onSelect={chooseWorkoutTemplate} />}
+    {mealOpen && <MealSheet data={data} onClose={() => setMealOpen(false)} onFuelSaved={fuelSaved} />}
     {mealDetailsOpen && <MealDetailsSheet data={data} onClose={() => setMealDetailsOpen(false)} />}
-    {bodyOpen && <BodySheet data={data} onClose={() => setBodyOpen(false)} />}
-    {addExerciseOpen && data.session && <AddExerciseSheet data={data} onClose={() => setAddExerciseOpen(false)} />}
-    {swapExercise && <SwapExerciseSheet data={data} exercise={swapExercise} onClose={() => setSwapExercise(null)} />}
+    {bodyOpen && <BodySheet data={data} onClose={() => setBodyOpen(false)} onWeightSaved={weightSaved} />}
+    {addExerciseOpen && session && <AddExerciseSheet data={data} onClose={() => setAddExerciseOpen(false)} onAdd={addExercise} />}
+    {swapExercise && <SwapExerciseSheet data={data} exercise={swapExercise} onClose={() => setSwapExercise(null)} onSwap={(replacementId) => replaceExercise(swapExercise, replacementId)} />}
     {selectedExercise && <ExerciseDetailsSheet key={selectedExercise.id} data={data} exercise={selectedExercise} onClose={() => setSelectedExercise(null)} />}
+
+    <ConfirmDialog
+      open={removeTarget !== null}
+      title="Remove exercise"
+      message={removeTarget ? `Remove ${removeTarget.name} from this workout? Its logged sets will be deleted.` : ""}
+      confirmLabel="Remove"
+      danger
+      onConfirm={() => { const target = removeTarget; setRemoveTarget(null); if (target) removeExercise(target); }}
+      onCancel={() => setRemoveTarget(null)}
+    />
+    <ConfirmDialog
+      open={cancelOpen}
+      title="Cancel workout"
+      message="Cancel this workout? Its logged sets will be discarded."
+      confirmLabel="Cancel workout"
+      danger
+      onConfirm={() => { setCancelOpen(false); cancelWorkout(); }}
+      onCancel={() => setCancelOpen(false)}
+    />
   </>;
 }
 
@@ -270,6 +426,7 @@ const ExerciseRow = forwardRef<ExerciseRowHandle, { data: ExerciseData; unit: "k
 
   const [sets, setSets] = useState<LocalSet[]>(() => data.sets.map(toLocalSet));
   const [editingSets, setEditingSets] = useState<Set<number>>(() => new Set());
+  const [setToDelete, setSetToDelete] = useState<LocalSet | null>(null);
   const [error, setError] = useState("");
   const setTrackRef = useRef<HTMLDivElement>(null);
   const setsRef = useRef<LocalSet[]>(sets);
@@ -414,6 +571,13 @@ const ExerciseRow = forwardRef<ExerciseRowHandle, { data: ExerciseData; unit: "k
   }, [sessionId, data.id]);
 
   useImperativeHandle(ref, () => ({
+    resetLocal() {
+      const next = setsRef.current.map((set) => ({ ...set, weight: "", reps: "", completed: false, saved: true }));
+      setSets(next);
+      setsRef.current = next;
+      setEditingSets(new Set<number>());
+      editingSetsRef.current = new Set();
+    },
     async flushDrafts() {
       if (!sessionId) return { success: true };
       const payloads = setsRef.current.filter((set) => !set.saved).map(toPayload);
@@ -470,7 +634,7 @@ const ExerciseRow = forwardRef<ExerciseRowHandle, { data: ExerciseData; unit: "k
            isEditing={editingSets.has(set.setNumber)}
            isPr={set.setNumber === prSetNumber}
            key={set.setNumber}
-           onDelete={removeSet}
+           onDelete={setSetToDelete}
            onEdit={editSet}
            onLog={logSet}
            onPatch={updateSet}
@@ -480,7 +644,16 @@ const ExerciseRow = forwardRef<ExerciseRowHandle, { data: ExerciseData; unit: "k
        </div>
        {error && <p className="error-text set-error" aria-live="polite">{error}</p>}
        <button className="add-set" onClick={addSet}><Plus size={13} /> Add set</button>
-     </> : <p className="panel-kicker">Start the workout to log sets. The plan can still change after starting.</p>}
+       <ConfirmDialog
+         open={setToDelete !== null}
+         title="Delete set"
+         message="Delete this set? Later sets will renumber."
+         confirmLabel="Delete"
+         danger
+         onConfirm={() => { const target = setToDelete; setSetToDelete(null); if (target) removeSet(target); }}
+         onCancel={() => setSetToDelete(null)}
+       />
+      </> : <p className="panel-kicker">Start the workout to log sets. The plan can still change after starting.</p>}
    </div>;
 });
 
@@ -620,68 +793,31 @@ function AdjustableNumber({ label, value, step, inputMode, disabled = false, onC
   </label>;
 }
 
-function SwapExerciseSheet({ data, exercise, onClose }: { data: TodayData; exercise: ExerciseData; onClose: () => void }) {
-  const router = useRouter();
+function SwapExerciseSheet({ data, exercise, onClose, onSwap }: { data: TodayData; exercise: ExerciseData; onClose: () => void; onSwap: (replacementId: string) => void }) {
   const available = data.library.filter((item) => item.id !== exercise.id && !data.exercises.some((current) => current.id === item.id));
   const [exerciseId, setExerciseId] = useState(available[0]?.id ?? "");
-  const [error, setError] = useState("");
-  const [pending, startTransition] = useTransition();
-
-  function swap() {
-    if (!data.session || !exerciseId) return;
-    setError("");
-    startTransition(async () => {
-      const result = await replaceSessionExercise({
-        sessionExerciseId: exercise.sessionExerciseId ?? undefined,
-        sessionId: data.session.id,
-        oldExerciseId: exercise.id,
-        exerciseId,
-      });
-      if (result.success) {
-        if (data.session) clearExerciseDrafts(data.session.id, exercise.id);
-        router.refresh();
-        onClose();
-      } else setError(result.error ?? "This exercise could not be swapped.");
-    });
-  }
 
   return <div className="sheet-backdrop" role="dialog" aria-modal="true" aria-labelledby="swap-title">
     <div className="sheet compact-sheet">
        <div className="sheet-heading"><div><h2 className="sheet-title" id="swap-title">Swap {exercise.name}</h2></div><button className="sheet-close" onClick={onClose} aria-label="Close"><X size={20} /></button></div>
-       {available.length ? <><p className="notice">The template stays unchanged. Only blank sets move to the replacement.</p><label className="form-group sheet-field"><span className="form-label">Replacement</span><select className="select-field" value={exerciseId} onChange={(event) => setExerciseId(event.target.value)}>{available.map((option) => <option key={option.id} value={option.id}>{option.name} · {option.primaryMuscle}</option>)}</select></label>{error && <p className="error-text">{error}</p>}<div className="sheet-actions"><button className="button ghost" onClick={onClose}>Cancel</button><button className="button" disabled={pending} onClick={swap}>{pending ? "Swapping..." : "Swap exercise"}</button></div></> : <><div className="empty-state"><strong>No unused exercises available.</strong>Add an exercise in Library first, or keep the movements already in this workout.</div><div className="sheet-actions"><button className="button" onClick={onClose}>Close</button></div></>}
+       {available.length ? <><p className="notice">The template stays unchanged. Only blank sets move to the replacement.</p><label className="form-group sheet-field"><span className="form-label">Replacement</span><select className="select-field" value={exerciseId} onChange={(event) => setExerciseId(event.target.value)}>{available.map((option) => <option key={option.id} value={option.id}>{option.name} · {option.primaryMuscle}</option>)}</select></label><div className="sheet-actions"><button className="button ghost" onClick={onClose}>Cancel</button><button className="button" disabled={!exerciseId} onClick={() => { onSwap(exerciseId); onClose(); }}>Swap exercise</button></div></> : <><div className="empty-state"><strong>No unused exercises available.</strong>Add an exercise in Library first, or keep the movements already in this workout.</div><div className="sheet-actions"><button className="button" onClick={onClose}>Close</button></div></>}
     </div>
   </div>;
 }
 
-function AddExerciseSheet({ data, onClose }: { data: TodayData; onClose: () => void }) {
-  const router = useRouter();
+function AddExerciseSheet({ data, onClose, onAdd }: { data: TodayData; onClose: () => void; onAdd: (exerciseId: string) => void }) {
   const available = data.library.filter((item) => !data.exercises.some((current) => current.id === item.id));
   const [exerciseId, setExerciseId] = useState(available[0]?.id ?? "");
-  const [error, setError] = useState("");
-  const [pending, startTransition] = useTransition();
-
-  function add() {
-    if (!data.session || !exerciseId) return;
-    setError("");
-    startTransition(async () => {
-      const result = await addExerciseToSession({ sessionId: data.session!.id, exerciseId });
-      if (result.success) {
-        router.refresh();
-        onClose();
-      } else setError(result.error ?? "This exercise could not be added.");
-    });
-  }
 
   return <div className="sheet-backdrop" role="dialog" aria-modal="true" aria-labelledby="add-exercise-title">
     <div className="sheet compact-sheet">
        <div className="sheet-heading"><div><h2 className="sheet-title" id="add-exercise-title">Add an exercise</h2></div><button className="sheet-close" onClick={onClose} aria-label="Close"><X size={20} /></button></div>
-       {available.length ? <><p className="notice">Added to this workout only with three empty sets.</p><label className="form-group sheet-field"><span className="form-label">Exercise</span><select className="select-field" value={exerciseId} onChange={(event) => setExerciseId(event.target.value)}>{available.map((option) => <option key={option.id} value={option.id}>{option.name} · {option.primaryMuscle}</option>)}</select></label>{error && <p className="error-text">{error}</p>}<div className="sheet-actions"><button className="button ghost" onClick={onClose}>Cancel</button><button className="button" disabled={pending} onClick={add}>{pending ? "Adding..." : "Add exercise"}</button></div></> : <><div className="empty-state"><strong>Everything in your library is already in this workout.</strong>Use Library to create another movement.</div><div className="sheet-actions"><button className="button" onClick={onClose}>Close</button></div></>}
+       {available.length ? <><p className="notice">Added to this workout only with three empty sets.</p><label className="form-group sheet-field"><span className="form-label">Exercise</span><select className="select-field" value={exerciseId} onChange={(event) => setExerciseId(event.target.value)}>{available.map((option) => <option key={option.id} value={option.id}>{option.name} · {option.primaryMuscle}</option>)}</select></label><div className="sheet-actions"><button className="button ghost" onClick={onClose}>Cancel</button><button className="button" disabled={!exerciseId} onClick={() => { onAdd(exerciseId); onClose(); }}>Add exercise</button></div></> : <><div className="empty-state"><strong>Everything in your library is already in this workout.</strong>Use Library to create another movement.</div><div className="sheet-actions"><button className="button" onClick={onClose}>Close</button></div></>}
     </div>
   </div>;
 }
 
 function WorkoutCapture({ data, initialFocus = false }: { data: TodayData; initialFocus?: boolean }) {
-  const router = useRouter();
   const [text, setText] = useState("");
   const [parsed, setParsed] = useState<WorkoutParse | null>(null);
   const [error, setError] = useState("");
@@ -754,7 +890,6 @@ function WorkoutCapture({ data, initialFocus = false }: { data: TodayData; initi
           return;
         }
       }
-      router.refresh();
       setText("");
       setParsed(null);
     });
@@ -794,8 +929,7 @@ function WorkoutCapture({ data, initialFocus = false }: { data: TodayData; initi
   </section>;
 }
 
-function MealSheet({ data, onClose }: { data: TodayData; onClose: () => void }) {
-  const router = useRouter();
+function MealSheet({ data, onClose, onFuelSaved }: { data: TodayData; onClose: () => void; onFuelSaved: (fuel: DailyFuelData) => () => void }) {
   const [text, setText] = useState("");
   const [parsed, setParsed] = useState<MealParse | null>(null);
   const [error, setError] = useState("");
@@ -805,12 +939,20 @@ function MealSheet({ data, onClose }: { data: TodayData; onClose: () => void }) 
   const suggestions = useMemo(() => (text.trim() ? matchReusableMeals(data.reusableMeals, text) : []), [text, data.reusableMeals]);
   function reuse(meal: ReusableMeal) { setError(""); setText(meal.rawInput); setParsed({ summary: meal.rawInput, items: meal.parsedItems as MealParse["items"], calories: meal.calories ?? 0, protein: meal.protein ?? 0, carbs: meal.carbs ?? 0, fat: meal.fat ?? 0 }); }
   function parse() { setError(""); startTransition(async () => { const result = await parseMealText(text); if (result.success) setParsed(result.data); else setError(result.error); }); }
-  function confirm() { if (!parsed) return; startTransition(async () => { const result = await confirmMeal({ ...parsed, rawInput: text, mealDate: data.today }); if (result.success) { router.refresh(); onClose(); } else setError(result.error); }); }
+  function confirm() {
+    if (!parsed) return;
+    const fuel = { calories: parsed.calories ?? 0, protein: parsed.protein ?? 0, carbs: parsed.carbs ?? 0, fat: parsed.fat ?? 0 };
+    const rollback = onFuelSaved(fuel);
+    startTransition(async () => {
+      const result = await confirmMeal({ ...parsed, rawInput: text, mealDate: data.today });
+      if (result.success) onClose();
+      else { rollback(); setError(result.error); }
+    });
+  }
    return <div className="sheet-backdrop centered-sheet-backdrop" role="dialog" aria-modal="true" aria-labelledby="meal-title"><div className="sheet centered-sheet"><div className="sheet-heading"><div><h2 className="sheet-title" id="meal-title">Log a meal</h2></div><button className="sheet-close" onClick={onClose} aria-label="Close"><X size={20} /></button></div>{!parsed ? <><div className="parse-box"><textarea className="field" placeholder="e.g. chicken bowl with rice and vegetables" value={text} onChange={(event) => setText(event.target.value)} /><button className={`icon-button mic-button${speech.listening ? " listening" : ""}`} onClick={speech.toggle} disabled={!speech.supported} aria-label="Use microphone"><Mic size={17} /></button></div>{!text.trim() && commonMeals.length > 0 && <div className="common-meals"><span className="common-meals-label">Common meals</span><div className="common-meals-chips">{commonMeals.map((meal) => <button className="common-meal-chip" type="button" key={meal.rawInput} onClick={() => reuse(meal)}><span>{meal.rawInput}</span><strong>{Math.round(meal.calories ?? 0)} kcal</strong></button>)}</div></div>}{suggestions.length > 0 && <div className="meal-suggestions-wrap"><span className="meal-suggestions-label">Reuse a previous meal</span><ul className="meal-suggestions" role="listbox" aria-label="Matching meals">{suggestions.map((meal) => <li role="option" aria-selected="false" key={meal.rawInput}><button type="button" onClick={() => reuse(meal)}><span>{meal.rawInput}</span><strong>{Math.round(meal.calories ?? 0)} kcal</strong></button></li>)}</ul></div>}{error && <p className="error-text">{error}</p>}<div className="sheet-actions"><button className="button" onClick={parse} disabled={pending || !text.trim()}>{pending ? "Estimating..." : "Review estimate"}</button></div></> : <><div className="notice">Nutrition values are estimates. Adjust them before saving.</div><div className="macro-grid">{(["calories", "protein", "carbs", "fat"] as const).map((key) => <label className="macro-box" key={key}><span className="macro-label">{key === "calories" ? "kcal" : key}</span><input className="field tiny-field" type="number" value={parsed[key]} onChange={(event) => setParsed({ ...parsed, [key]: Number(event.target.value) })} /></label>)}</div><p className="status-text">{parsed.summary}</p>{error && <p className="error-text">{error}</p>}<div className="sheet-actions"><button className="button ghost" onClick={() => setParsed(null)}>Back</button><button className="button" disabled={pending} onClick={confirm}>{pending ? "Saving..." : "Confirm meal"}</button></div></>}</div></div>;
 }
 
-function BodySheet({ data, onClose }: { data: TodayData; onClose: () => void }) {
-  const router = useRouter();
+function BodySheet({ data, onClose, onWeightSaved }: { data: TodayData; onClose: () => void; onWeightSaved: (weightKg: number) => () => void }) {
   const [unit, setUnit] = useState<"kg" | "lb">(data.profile.preferredUnit);
   const [weight, setWeight] = useState("");
   const [height, setHeight] = useState(data.profile.heightCm ? String(data.profile.heightCm) : "");
@@ -818,7 +960,14 @@ function BodySheet({ data, onClose }: { data: TodayData; onClose: () => void }) 
   const [error, setError] = useState("");
   const [pending, startTransition] = useTransition();
   const bmi = calculateBmi(kgFromUnit(Number(weight), unit) ?? 0, Number(height) || null);
-  function submit() { startTransition(async () => { const result = await saveBodyMetric({ metricDate: data.today, weight: Number(weight), unit, heightCm: height ? Number(height) : null, bodyFatPercent: bodyFat ? Number(bodyFat) : null }); if (result.success) { router.refresh(); onClose(); } else setError(result.error); }); }
+  function submit() {
+    const rollback = onWeightSaved(kgFromUnit(Number(weight), unit) ?? 0);
+    startTransition(async () => {
+      const result = await saveBodyMetric({ metricDate: data.today, weight: Number(weight), unit, heightCm: height ? Number(height) : null, bodyFatPercent: bodyFat ? Number(bodyFat) : null });
+      if (result.success) onClose();
+      else { rollback(); setError(result.error); }
+    });
+  }
    return <div className="sheet-backdrop centered-sheet-backdrop" role="dialog" aria-modal="true" aria-labelledby="body-title"><div className="sheet centered-sheet"><div className="sheet-heading"><div><h2 className="sheet-title" id="body-title">Body check-in</h2></div><button className="sheet-close" onClick={onClose} aria-label="Close"><X size={20} /></button></div><div className="form-grid"><label className="form-group"><span className="form-label">Weight</span><div className="unit-input"><input className="field" type="number" inputMode="decimal" value={weight} onChange={(event) => setWeight(event.target.value)} placeholder="72.5" /><select className="select-field" value={unit} onChange={(event) => setUnit(event.target.value as "kg" | "lb")}><option>kg</option><option>lb</option></select></div></label><label className="form-group"><span className="form-label">Height (cm)</span><input className="field" type="number" value={height} onChange={(event) => setHeight(event.target.value)} placeholder="180" /></label><label className="form-group"><span className="form-label">Body fat % (optional)</span><input className="field" type="number" value={bodyFat} onChange={(event) => setBodyFat(event.target.value)} placeholder="18" /></label></div>{bmi ? <p className="notice spaced-notice">BMI: <strong>{bmi.toFixed(1)}</strong> based on the height entered today.</p> : <p className="status-text spaced-notice">Enter height to calculate BMI. Saved height is prefilled when available.</p>}{error && <p className="error-text">{error}</p>}<div className="sheet-actions"><button className="button ghost" onClick={onClose}>Cancel</button><button className="button" disabled={pending || !weight} onClick={submit}>{pending ? "Saving..." : "Save check-in"}</button></div></div></div>;
 }
 
@@ -955,9 +1104,9 @@ function ExerciseDetailsSheet({ data, exercise, onClose }: { data: TodayData; ex
 }
 
 function MealDetailsSheet({ data, onClose }: { data: TodayData; onClose: () => void }) {
-  const router = useRouter();
   const [removedIds, setRemovedIds] = useState<Set<string>>(new Set());
   const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [mealToDelete, setMealToDelete] = useState<MealDetailsData | null>(null);
   const [error, setError] = useState("");
   const [, startTransition] = useTransition();
   const meals = data.meals.filter((meal) => !removedIds.has(meal.id));
@@ -975,11 +1124,14 @@ function MealDetailsSheet({ data, onClose }: { data: TodayData; onClose: () => v
     setDeletingId(id);
     setError("");
     startTransition(async () => {
+      setRemovedIds((current) => new Set(current).add(id));
       const result = await deleteMeal(id);
-      if (result.success) {
-        setRemovedIds((current) => new Set(current).add(id));
-        router.refresh();
-      } else {
+      if (!result.success) {
+        setRemovedIds((current) => {
+          const next = new Set(current);
+          next.delete(id);
+          return next;
+        });
         setError(result.error ?? "The meal could not be deleted.");
       }
       setDeletingId(null);
@@ -1006,7 +1158,7 @@ function MealDetailsSheet({ data, onClose }: { data: TodayData; onClose: () => v
                 </div>
                 <div className="meal-detail-actions">
                   {deletingId === meal.id && <span className="meal-deleting">Deleting...</span>}
-                  <button className="meal-delete" type="button" disabled={deletingId !== null} onClick={() => removeMeal(meal.id)} aria-label={`Delete ${meal.rawInput}`} title="Delete meal"><Trash2 size={17} /></button>
+                  <button className="meal-delete" type="button" disabled={deletingId !== null} onClick={() => setMealToDelete(meal)} aria-label={`Delete ${meal.rawInput}`} title="Delete meal"><Trash2 size={17} /></button>
                 </div>
               </div>
               <div className="meal-detail-macros">
@@ -1035,6 +1187,15 @@ function MealDetailsSheet({ data, onClose }: { data: TodayData; onClose: () => v
       </> : <div className="empty-state"><strong>No meals logged for this day.</strong>Use the Log a meal card to add one.</div>}
       {error && <p className="error-text" aria-live="polite">{error}</p>}
       <p className="meal-details-hint">Use the trash button to delete a meal</p>
+      <ConfirmDialog
+        open={mealToDelete !== null}
+        title="Delete meal"
+        message="Delete this meal and all its logged nutrition?"
+        confirmLabel="Delete"
+        danger
+        onConfirm={() => { const target = mealToDelete; setMealToDelete(null); if (target) removeMeal(target.id); }}
+        onCancel={() => setMealToDelete(null)}
+      />
     </div>
   </div>;
 }

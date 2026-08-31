@@ -1,7 +1,6 @@
 "use client";
 
 import { useMemo, useState, useTransition } from "react";
-import { useRouter } from "next/navigation";
 import { Check, Dumbbell, Scale, SlidersHorizontal, Sparkles, TrendingUp, Utensils, X } from "lucide-react";
 import { CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { DailyFuelCard } from "@/components/daily-fuel-card";
@@ -27,7 +26,14 @@ export function ProgressScreen({ data }: { data: ProgressData }) {
   const [pickerOpen, setPickerOpen] = useState(false);
   const [pickerError, setPickerError] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
-  const router = useRouter();
+  const [optimisticTracked, setOptimisticTracked] = useState<string[] | null>(null);
+  const trackedExerciseIds = optimisticTracked ?? data.trackedExerciseIds;
+  // Drop the optimistic list once the revalidated server data confirms it.
+  const [prevTracked, setPrevTracked] = useState(data.trackedExerciseIds);
+  if (prevTracked !== data.trackedExerciseIds) {
+    setPrevTracked(data.trackedExerciseIds);
+    setOptimisticTracked(null);
+  }
 
   const todayKey = dateKey(new Date());
   const startKey = range === "All" ? (data.completedDates[0] ?? todayKey) : daysAgoKey(rangeDays(range) - 1);
@@ -47,7 +53,7 @@ export function ProgressScreen({ data }: { data: ProgressData }) {
   const activeWeeks = calendar.filter((week) => week.cells.some((cell) => cell.inRange && cell.level > 0)).length;
   const daysInRange = range === "All" ? Math.max(1, daysBetween(startKey, todayKey) + 1) : rangeDays(range);
   const perWeek = workoutDates.length / Math.max(1, daysInRange / 7);
-  const strengthCards = data.trackedExerciseIds.map((id) => data.exerciseHistory.find((exercise) => exercise.id === id)).filter((exercise): exercise is ExerciseHistory => Boolean(exercise)).map((exercise) => {
+  const strengthCards = trackedExerciseIds.map((id) => data.exerciseHistory.find((exercise) => exercise.id === id)).filter((exercise): exercise is ExerciseHistory => Boolean(exercise)).map((exercise) => {
     const points = exercise.points.filter((point) => point.date >= startKey);
     const first = points[0];
     const last = points.at(-1);
@@ -72,9 +78,14 @@ export function ProgressScreen({ data }: { data: ProgressData }) {
 
   function openPicker() { setPickerError(null); setPickerOpen(true); }
   function savePicked(exerciseIds: string[]) {
+    setPickerOpen(false);
+    setOptimisticTracked(exerciseIds);
     startTransition(async () => {
       const result = await saveTrackedExercises({ exerciseIds });
-      if (result.success) { setPickerOpen(false); router.refresh(); } else setPickerError(result.error);
+      if (!result.success) {
+        setOptimisticTracked(null);
+        setPickerError(result.error);
+      }
     });
   }
 

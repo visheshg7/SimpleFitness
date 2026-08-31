@@ -1,6 +1,7 @@
 "use client";
 
-import { useMemo, useState, useTransition } from "react";
+import { useMemo, useRef, useState, useTransition } from "react";
+import { toast } from "sonner";
 import {
   Archive,
   ArchiveRestore,
@@ -28,6 +29,7 @@ import {
 import { getLibraryData } from "@/lib/queries/library";
 import { normalizeMuscle } from "@/lib/muscles";
 import { MuscleSelect } from "@/components/muscle-select";
+import { ConfirmDialog } from "@/components/confirm-dialog";
 import { activityLevels, calculateBmr, calculateCalorieTargets, calculateTdee, kgFromUnit, valueInUnit, type ActivityLevel, type CalorieGoal } from "@/lib/metrics";
 
 type LibraryData = Awaited<ReturnType<typeof getLibraryData>>;
@@ -53,6 +55,10 @@ export function LibraryScreen({ data }: { data: LibraryData }) {
   const [calorieGoal, setCalorieGoal] = useState<CalorieGoal | "">(data.profile?.calorieGoal ?? "");
   const [exerciseSearch, setExerciseSearch] = useState("");
   const [editingExercise, setEditingExercise] = useState<LibraryData["exercises"][number] | null>(null);
+  const [deleteTemplateOpen, setDeleteTemplateOpen] = useState(false);
+  const [renaming, setRenaming] = useState(false);
+  const [renameValue, setRenameValue] = useState("");
+  const renameInputRef = useRef<HTMLInputElement>(null);
 
   const selectedTemplate = data.templates.find((template) => template.id === selectedTemplateId) ?? data.templates[0];
   const activeExerciseCount = data.exercises.filter((exercise) => !exercise.archived).length;
@@ -74,15 +80,20 @@ export function LibraryScreen({ data }: { data: LibraryData }) {
   function run(action: () => Promise<{ success: boolean; error?: string }>) {
     startTransition(async () => {
       const result = await action();
-      if (!result.success) window.alert(result.error);
-      else window.location.reload();
+      if (!result.success) toast.error(result.error ?? "That change could not be saved.");
     });
   }
 
-  function renameSelectedTemplate() {
+  function beginRename() {
     if (!selectedTemplate) return;
-    const name = window.prompt("Rename template", selectedTemplate.name);
-    if (name?.trim()) run(() => renameTemplate(selectedTemplate.id, { name }));
+    setRenameValue(selectedTemplate.name);
+    setRenaming(true);
+  }
+
+  function submitRename() {
+    if (!selectedTemplate || !renameValue.trim()) return;
+    setRenaming(false);
+    run(() => renameTemplate(selectedTemplate.id, { name: renameValue.trim() }));
   }
 
   function editLibraryExercise(exercise: LibraryData["exercises"][number]) {
@@ -91,7 +102,7 @@ export function LibraryScreen({ data }: { data: LibraryData }) {
 
   function saveCalorieNeeds() {
     if (tdee === null || !selectedCalorieTarget) {
-      window.alert("Choose a daily calorie target before saving.");
+      toast.warning("Choose a daily calorie target before saving.", { duration: 5000 });
       return;
     }
     const year = new Date().getFullYear();
@@ -179,14 +190,26 @@ export function LibraryScreen({ data }: { data: LibraryData }) {
               <div className="library-detail-heading">
                 <div>
                   <div className="eyebrow">Routine {String(data.templates.findIndex((template) => template.id === selectedTemplate.id) + 1).padStart(2, "0")}</div>
-                  <h2>{selectedTemplate.name}</h2>
+                  {renaming ? <input
+                    ref={renameInputRef}
+                    autoFocus
+                    className="field library-rename-field"
+                    value={renameValue}
+                    onChange={(event) => setRenameValue(event.target.value)}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter") { event.preventDefault(); submitRename(); }
+                      if (event.key === "Escape") setRenaming(false);
+                    }}
+                    onBlur={() => setRenaming(false)}
+                    aria-label="Routine name"
+                  /> : <h2>{selectedTemplate.name}</h2>}
                   <p>{selectedTemplate.exercises.length} {selectedTemplate.exercises.length === 1 ? "movement" : "movements"} in this routine</p>
                 </div>
                 <div className="library-detail-actions">
                   <button className="button small ghost" disabled={pending || data.templates.findIndex((template) => template.id === selectedTemplate.id) === 0} onClick={() => run(() => moveTemplate(selectedTemplate.id, "up"))} aria-label="Move routine up"><ArrowUp size={13} /></button>
                   <button className="button small ghost" disabled={pending || data.templates.findIndex((template) => template.id === selectedTemplate.id) === data.templates.length - 1} onClick={() => run(() => moveTemplate(selectedTemplate.id, "down"))} aria-label="Move routine down"><ArrowDown size={13} /></button>
-                  <button className="button small ghost" onClick={renameSelectedTemplate}><Pencil size={13} /> Rename</button>
-                  <button className="button small ghost danger-button" onClick={() => { if (window.confirm("Delete this template? Historical workouts stay intact.")) run(() => deleteTemplate(selectedTemplate.id)); }} aria-label={`Delete ${selectedTemplate.name}`}><Trash2 size={13} /></button>
+                  <button className="button small ghost" onClick={beginRename}><Pencil size={13} /> Rename</button>
+                  <button className="button small ghost danger-button" onClick={() => setDeleteTemplateOpen(true)} aria-label={`Delete ${selectedTemplate.name}`}><Trash2 size={13} /></button>
                 </div>
               </div>
 
@@ -326,6 +349,16 @@ export function LibraryScreen({ data }: { data: LibraryData }) {
         onSave={(input) => run(() => editExercise(editingExercise.id, input))}
         onClose={() => setEditingExercise(null)}
       />}
+
+      <ConfirmDialog
+        open={deleteTemplateOpen}
+        title="Delete template"
+        message="Delete this template? Historical workouts stay intact."
+        confirmLabel="Delete"
+        danger
+        onConfirm={() => { setDeleteTemplateOpen(false); if (selectedTemplate) run(() => deleteTemplate(selectedTemplate.id)); }}
+        onCancel={() => setDeleteTemplateOpen(false)}
+      />
     </>
   );
 }
