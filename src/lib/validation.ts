@@ -46,7 +46,7 @@ export const workoutParseSchema = z.object({
 });
 
 export const mealParseSchema = z.object({
-  summary: z.string().trim().min(1).max(240),
+  summary: z.string().trim().min(1).max(500),
   items: z.array(z.object({
     name: z.string().trim().min(1).max(120),
     quantity: z.string().max(80).optional(),

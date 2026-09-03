@@ -1,4 +1,5 @@
 import "server-only";
+import { z } from "zod";
 import { exerciseAnswerSchema, exerciseGuidanceSchema, mealParseSchema, rawTextSchema, workoutParseSchema, type ExerciseAnswer, type ExerciseGuidance, type MealParse, type WorkoutParse } from "./validation";
 import { MUSCLES } from "./muscles";
 import type { Exercise } from "@/db/schema";
@@ -8,6 +9,12 @@ export class AiError extends Error {
     super(message);
     this.name = "AiError";
   }
+}
+
+function describeZodError(label: string, error: z.ZodError, hint: string): string {
+  const issue = error.issues[0];
+  const path = issue.path.join(".");
+  return `${label} was invalid (${path || "root"}: ${issue.message}). ${hint}`;
 }
 
 async function askOpenRouter(system: string, user: string) {
@@ -52,7 +59,7 @@ export async function parseWorkout(rawText: string, exerciseNames: string[]): Pr
     text,
   );
   const parsed = workoutParseSchema.safeParse(result);
-  if (!parsed.success) throw new AiError("The workout result was missing a field. Edit the text or retry.");
+  if (!parsed.success) throw new AiError(describeZodError("The workout result", parsed.error, "Edit the text or retry."));
   return parsed.data;
 }
 
@@ -63,7 +70,7 @@ export async function parseMeal(rawText: string): Promise<MealParse> {
     text,
   );
   const parsed = mealParseSchema.safeParse(result);
-  if (!parsed.success) throw new AiError("The meal result was missing a field. Edit the text or retry.");
+  if (!parsed.success) throw new AiError(describeZodError("The meal result", parsed.error, "Edit the text or retry."));
   return parsed.data;
 }
 
@@ -73,7 +80,7 @@ export async function generateExerciseGuidance(exercise: Exercise): Promise<Exer
     `Exercise: ${exercise.name}\nPrimary target muscle: ${exercise.primaryMuscle}\nSecondary muscles: ${exercise.secondaryMuscles.length ? exercise.secondaryMuscles.join(", ") : "none"}`,
   );
   const parsed = exerciseGuidanceSchema.safeParse(result);
-  if (!parsed.success) throw new AiError("The guidance result was missing a field. Try again.");
+  if (!parsed.success) throw new AiError(describeZodError("The guidance result", parsed.error, "Try again."));
   return parsed.data;
 }
 
@@ -84,6 +91,6 @@ export async function askExerciseQuestion(exercise: Exercise, question: string):
     `Exercise: ${exercise.name}\nPrimary target muscle: ${exercise.primaryMuscle}\nSecondary muscles: ${exercise.secondaryMuscles.length ? exercise.secondaryMuscles.join(", ") : "none"}\n\nQuestion: ${text}`,
   );
   const parsed = exerciseAnswerSchema.safeParse(result);
-  if (!parsed.success) throw new AiError("The answer was missing a field. Try again.");
+  if (!parsed.success) throw new AiError(describeZodError("The answer", parsed.error, "Try again."));
   return parsed.data;
 }
